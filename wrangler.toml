@@ -1,0 +1,8 @@
+name = "student-session-tracker"
+compatibility_date = "2026-11-07"
+pages_build_output_dir = "public"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "student_sessions_db"
+database_id = "a06c70c4-02e6-4da2-a5a1-7127260b3f88"

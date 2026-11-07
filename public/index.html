@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Student Session Tracker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- App Container -->
+  <div class="app-layout">
+    
+    <!-- Top Header -->
+    <header class="top-header">
+      <div class="header-brand">
+        <div class="brand-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            <path d="M12 6v6"/>
+            <path d="M9 9h6"/>
+          </svg>
+        </div>
+        <div class="brand-title">
+          <h1>Session Tracker</h1>
+          <span class="subtext">20-Class Course Manager</span>
+        </div>
+      </div>
+
+      <!-- Quick Action Buttons -->
+      <div class="header-actions">
+        <button id="btnOpenAddStudent" class="btn btn-primary" title="Add a new student">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          <span class="btn-text">Add Student</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs (Mobile & Windows Desktop friendly) -->
+    <nav class="nav-tabs" aria-label="Main Navigation">
+      <button class="nav-tab active" data-view="dashboard" id="tabDashboard">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+          <line x1="16" y1="2" x2="16" y2="6"/>
+          <line x1="8" y1="2" x2="8" y2="6"/>
+          <line x1="3" y1="10" x2="21" y2="10"/>
+        </svg>
+        <span>Today's Classes</span>
+        <span class="badge-counter" id="todayPendingCount" style="display: none;">0</span>
+      </button>
+
+      <button class="nav-tab" data-view="students" id="tabStudents">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+          <circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        <span>All Students</span>
+      </button>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+
+      <!-- ================= VIEW 1: DAILY DASHBOARD ================= -->
+      <section id="viewDashboard" class="app-view active">
+        <!-- Date Bar -->
+        <div class="dashboard-bar">
+          <div class="date-navigator">
+            <button id="btnPrevDay" class="btn-icon" title="Previous Day" aria-label="Previous Day">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <div class="date-display">
+              <span id="dateHumanLabel" class="date-human">Today</span>
+              <input type="date" id="dashboardDatePicker" class="date-picker-inline" title="Select Date">
+            </div>
+            <button id="btnNextDay" class="btn-icon" title="Next Day" aria-label="Next Day">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+            <button id="btnTodayReset" class="btn-pill" title="Jump to Today">Today</button>
+          </div>
+
+          <!-- Quick Metrics for the Day -->
+          <div class="day-metrics">
+            <div class="day-metric-pill">
+              <span class="metric-val" id="dayTotal">0</span>
+              <span class="metric-label">Scheduled</span>
+            </div>
+            <div class="day-metric-pill pill-pending">
+              <span class="metric-val" id="dayPending">0</span>
+              <span class="metric-label">Pending</span>
+            </div>
+            <div class="day-metric-pill pill-taken">
+              <span class="metric-val" id="dayTaken">0</span>
+              <span class="metric-label">Taken</span>
+            </div>
+            <div class="day-metric-pill pill-missed">
+              <span class="metric-val" id="dayMissed">0</span>
+              <span class="metric-label">Missed</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Dashboard Students List -->
+        <div class="section-container">
+          <div class="section-header">
+            <h2>Classes for <span id="dashboardDateTitle">Today</span></h2>
+            <button id="btnRefreshDashboard" class="btn-ghost" title="Refresh">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+              <span>Refresh</span>
+            </button>
+          </div>
+
+          <div id="dashboardLoading" class="loading-state" style="display: none;">
+            <div class="spinner"></div>
+            <p>Loading classes...</p>
+          </div>
+
+          <div id="dashboardEmpty" class="empty-state" style="display: none;">
+            <div class="empty-icon">☕</div>
+            <h3>No classes scheduled for this date</h3>
+            <p>There are no student sessions scheduled on this day. Check another day or enroll a new student.</p>
+          </div>
+
+          <!-- Cards Grid for Desktop & Mobile -->
+          <div id="dashboardCards" class="cards-grid"></div>
+        </div>
+      </section>
+
+
+      <!-- ================= VIEW 2: ALL STUDENTS DIRECTORY ================= -->
+      <section id="viewStudents" class="app-view" style="display: none;">
+        <div class="section-container">
+          <div class="section-header directory-header">
+            <div>
+              <h2>Enrolled Students</h2>
+              <p class="section-subtext">Manage progress, calendars, and weekend slots</p>
+            </div>
+            <div class="search-box">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" id="studentSearchInput" placeholder="Search by name..." autocomplete="off">
+            </div>
+          </div>
+
+          <div id="studentsLoading" class="loading-state" style="display: none;">
+            <div class="spinner"></div>
+            <p>Loading students...</p>
+          </div>
+
+          <div id="studentsEmpty" class="empty-state" style="display: none;">
+            <div class="empty-icon">🎓</div>
+            <h3>No students found</h3>
+            <p>Get started by clicking "+ Add Student" above.</p>
+          </div>
+
+          <div id="studentsGrid" class="students-grid"></div>
+        </div>
+      </section>
+
+
+      <!-- ================= VIEW 3: STUDENT PROFILE & CALENDAR ================= -->
+      <section id="viewProfile" class="app-view" style="display: none;">
+        <div class="section-container">
+          
+          <!-- Back Bar -->
+          <div class="profile-top-bar">
+            <button id="btnBackToDirectory" class="btn btn-ghost">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+              <span>Back to Students</span>
+            </button>
+            <div class="profile-actions">
+              <button id="btnOpenWeekendModal" class="btn btn-secondary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                <span>+ Add Weekend Class</span>
+              </button>
+              <button id="btnDeleteStudent" class="btn btn-danger-ghost" title="Delete Student">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Student Profile Summary Card -->
+          <div class="student-profile-card">
+            <div class="profile-main-info">
+              <div class="avatar-circle" id="profileAvatar">S</div>
+              <div class="profile-title-block">
+                <h2 id="profileName">Student Name</h2>
+                <div class="profile-tags">
+                  <span class="tag tag-time" id="profileTime">⏰ 10:00 AM</span>
+                  <span class="tag tag-start" id="profileStart">Starts: 2026-11-09</span>
+                  <span class="tag tag-exam" id="profileExam">Exam: 2026-12-15</span>
+                  <span class="tag tag-countdown" id="profileDaysToExam">-- days to exam</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Calculated Metrics Cards -->
+            <div class="metrics-grid">
+              <div class="metric-card card-completed">
+                <div class="metric-number" id="metricCompleted">0</div>
+                <div class="metric-title">Completed (Taken)</div>
+                <div class="metric-sub">Classes done</div>
+              </div>
+
+              <div class="metric-card card-pending">
+                <div class="metric-number" id="metricPending">0</div>
+                <div class="metric-title">Sessions Left</div>
+                <div class="metric-sub">Pending classes</div>
+              </div>
+
+              <div class="metric-card card-missed">
+                <div class="metric-number" id="metricMissed">0</div>
+                <div class="metric-title">Missed</div>
+                <div class="metric-sub">Shifted to makeup</div>
+              </div>
+
+              <div class="metric-card card-enddate">
+                <div class="metric-number text-date" id="metricEndDate">--</div>
+                <div class="metric-title">Expected End Date</div>
+                <div class="metric-sub">Latest scheduled date</div>
+              </div>
+            </div>
+
+            <!-- Progress Bar -->
+            <div class="progress-section">
+              <div class="progress-labels">
+                <span id="progressText">0 / 20 Completed</span>
+                <span id="progressPercent">0%</span>
+              </div>
+              <div class="progress-track">
+                <div class="progress-bar progress-taken" id="barTaken" style="width: 0%"></div>
+                <div class="progress-bar progress-missed" id="barMissed" style="width: 0%"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sessions Timeline / Calendar List -->
+          <div class="sessions-calendar-wrapper">
+            <div class="section-header">
+              <div>
+                <h3>Session Schedule (<span id="sessionCountBadge">0</span>/20)</h3>
+                <p class="section-subtext">Click Taken or Missed on any session to update its status</p>
+              </div>
+            </div>
+
+            <div id="profileSessionsLoading" class="loading-state" style="display: none;">
+              <div class="spinner"></div>
+              <p>Loading schedule...</p>
+            </div>
+
+            <div id="sessionsTimeline" class="sessions-list"></div>
+          </div>
+
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Bottom Navigation Bar (Optimized for Mobile) -->
+    <footer class="mobile-nav-bar">
+      <button class="mobile-nav-item active" data-view="dashboard" id="mobTabDashboard">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        <span>Today</span>
+      </button>
+      <button class="mobile-nav-item" data-view="students" id="mobTabStudents">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+        <span>Students</span>
+      </button>
+      <button class="mobile-nav-item special-add" id="mobBtnAddStudent">
+        <div class="add-circle">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        </div>
+        <span>New</span>
+      </button>
+    </footer>
+
+  </div>
+
+  <!-- ================= MODAL: ADD STUDENT ================= -->
+  <div id="modalAddStudent" class="modal-backdrop" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div>
+          <h3>Enroll New Student</h3>
+          <p class="modal-subtext">Generates 20 weekday sessions ending before exam date</p>
+        </div>
+        <button class="modal-close" id="btnCloseAddStudent" aria-label="Close">&times;</button>
+      </div>
+      <form id="formAddStudent" class="modal-body">
+        <div class="form-group">
+          <label for="inputStudentName">Student Name <span class="required">*</span></label>
+          <input type="text" id="inputStudentName" placeholder="e.g. Rahul Sharma" required autocomplete="off">
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="inputStartDate">Course Start Date <span class="required">*</span></label>
+            <input type="date" id="inputStartDate" required>
+            <span class="field-hint">Weekdays are scheduled starting from this date</span>
+          </div>
+
+          <div class="form-group">
+            <label for="inputClassTime">Class Time <span class="required">*</span></label>
+            <input type="time" id="inputClassTime" required value="10:00">
+            <span class="field-hint">Daily schedule time</span>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="inputExamDate">Exam Date <span class="required">*</span></label>
+            <input type="date" id="inputExamDate" required>
+            <span class="field-hint">Cutoff: Sessions stop before this date</span>
+          </div>
+
+          <div class="form-group">
+            <label for="inputFinishedCount">Classes Already Finished</label>
+            <input type="number" id="inputFinishedCount" min="0" max="20" value="0">
+            <span class="field-hint">Initial sessions to mark as 'Taken' (0-20)</span>
+          </div>
+        </div>
+
+        <div id="formAddError" class="alert-box alert-error" style="display: none;"></div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" id="btnCancelAddStudent">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btnSubmitAddStudent">
+            <span class="btn-spinner" style="display: none;"></span>
+            <span>Create Student & Schedule</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+
+  <!-- ================= MODAL: ADD WEEKEND CLASS ================= -->
+  <div id="modalWeekend" class="modal-backdrop" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div>
+          <h3>Add Weekend Class</h3>
+          <p class="modal-subtext" id="weekendStudentLabel">For Student</p>
+        </div>
+        <button class="modal-close" id="btnCloseWeekendModal" aria-label="Close">&times;</button>
+      </div>
+      <form id="formAddWeekend" class="modal-body">
+        <input type="hidden" id="weekendStudentId">
+
+        <div class="alert-box alert-info">
+          <strong>Rule (Scenario C):</strong> Adding a Saturday or Sunday class marks it as <strong>Taken</strong> and deletes the student's <strong>last pending session</strong> to keep the total count capped at 20.
+        </div>
+
+        <div class="form-group">
+          <label for="inputWeekendDate">Select Weekend Date (Saturday or Sunday) <span class="required">*</span></label>
+          <input type="date" id="inputWeekendDate" required>
+          <span class="field-hint" id="weekendDateHint">Must be a Saturday or Sunday before the exam date</span>
+        </div>
+
+        <div id="formWeekendError" class="alert-box alert-error" style="display: none;"></div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" id="btnCancelWeekend">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btnSubmitWeekend">
+            <span class="btn-spinner" style="display: none;"></span>
+            <span>Confirm Weekend Class</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+
+  <!-- Toast Feedback Notifications -->
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
