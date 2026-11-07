@@ -1899,3 +1899,62 @@ button.cal-day:focus-visible {
   border: 1px dashed var(--gray-300);
   border-radius: var(--radius-md);
 }
+
+/* ================= Add Student: new vs already started ================= */
+[hidden] { display: none !important; }
+
+.mode-switch {
+  border: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.625rem;
+}
+
+.mode-switch legend {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--gray-700);
+  margin-bottom: 0.5rem;
+  padding: 0;
+}
+
+.mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  padding: 0.75rem;
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  background: #fff;
+  transition: var(--transition);
+}
+
+.mode-option:has(input:checked) {
+  border-color: var(--primary);
+  background: var(--primary-light);
+  box-shadow: 0 0 0 1px var(--primary);
+}
+
+.mode-option input {
+  margin-top: 0.2rem;
+  accent-color: var(--primary);
+}
+
+.mode-option span {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.875rem;
+  color: var(--gray-900);
+}
+
+.mode-option small {
+  color: var(--gray-500);
+  font-size: 0.75rem;
+}
+
+@media (max-width: 420px) {
+  .mode-switch { grid-template-columns: 1fr; }
+}

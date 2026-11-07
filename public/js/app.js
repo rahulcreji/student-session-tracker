@@ -1133,63 +1133,111 @@
 
     const today = getTodayLocalDateStr();
     document.getElementById('inputStartDate').value = today;
+    document.getElementById('inputNextClassDate').value = comingMonday(today);
     document.getElementById('inputExamDate').value = offsetDays(today, 35);
-    document.getElementById('inputFinishedCount').value = 0;
-    updateSchedulePreview();
+    document.getElementById('inputFinishedCount').value = 1;
+    applyStudentMode();
 
     modalAddStudent.style.display = 'flex';
     document.getElementById('inputStudentName').focus();
   }
 
-  // Live preview: how many weekday classes fit between start date and exam (max 20)
-  function updateSchedulePreview() {
-    const preview = document.getElementById('schedulePreview');
-    const start = document.getElementById('inputStartDate').value;
-    const exam = document.getElementById('inputExamDate').value;
-    if (!start || !exam) {
-      preview.style.display = 'none';
-      return;
-    }
-    if (start >= exam) {
-      preview.className = 'alert-box alert-error';
-      preview.textContent = 'Start date must be before the exam date.';
-      preview.style.display = 'block';
-      return;
-    }
-    const todayStr = getTodayLocalDateStr();
-    const finished = Math.max(0, parseInt(document.getElementById('inputFinishedCount').value, 10) || 0);
-    let count = 0;
-    let last = null;
-    let pastDays = 0;
-    for (let d = start; d < exam && count < 20; d = offsetDays(d, 1)) {
-      if (!isWeekendStr(d)) {
-        count++;
-        last = d;
-        if (d < todayStr) pastDays++;
-      }
-    }
-    // Past class days not covered by "Classes Already Finished" were never ticked -> counted as missed
-    const missedFromPast = Math.max(0, pastDays - finished);
-    const pastNote = missedFromPast > 0
-      ? ` Note: the start date is in the past. ${missedFromPast} class day(s) before today are not covered by "Classes Already Finished", so they will count as missed and makeup classes will be added.`
-      : '';
-
-    if (count === 0) {
-      preview.className = 'alert-box alert-error';
-      preview.textContent = 'No weekdays fit before the exam date.';
-    } else if (count < 20) {
-      preview.className = 'alert-box alert-warning';
-      preview.textContent = `Only ${count} of 20 classes (Mon–Fri) fit before the exam, last class ${formatDisplayDate(last)}.` + pastNote;
-    } else {
-      preview.className = missedFromPast ? 'alert-box alert-warning' : 'alert-box alert-info';
-      preview.textContent = `20 classes (Mon–Fri) will be scheduled, from ${formatDisplayDate(start)} to ${formatDisplayDate(last)}.` + pastNote;
-    }
-    preview.style.display = 'block';
+  // Today if it is Monday, otherwise the next Monday
+  function comingMonday(dateStr) {
+    const dow = parseLocalDate(dateStr).getUTCDay(); // 0 = Sun ... 1 = Mon
+    return offsetDays(dateStr, (8 - dow) % 7);
   }
 
-  document.getElementById('inputStartDate').addEventListener('change', updateSchedulePreview);
-  document.getElementById('inputExamDate').addEventListener('change', updateSchedulePreview);
+  function isAlreadyStartedMode() {
+    return document.getElementById('modeStarted').checked;
+  }
+
+  // Shows the fields for "New student" or "Already started" and keeps `required` in sync
+  function applyStudentMode() {
+    const started = isAlreadyStartedMode();
+    document.getElementById('groupStartDate').hidden = started;
+    document.getElementById('groupStarted').hidden = !started;
+    document.getElementById('inputStartDate').required = !started;
+    document.getElementById('inputNextClassDate').required = started;
+    document.getElementById('inputFinishedCount').required = started;
+    updateSchedulePreview();
+  }
+
+  // Weekday dates from `from` (inclusive) before `exam`, at most `limit` of them
+  function weekdaysFrom(from, exam, limit) {
+    const out = [];
+    for (let d = from; d < exam && out.length < limit; d = offsetDays(d, 1)) {
+      if (!isWeekendStr(d)) out.push(d);
+    }
+    return out;
+  }
+
+  // Live preview of what will be scheduled, in plain words
+  function updateSchedulePreview() {
+    const preview = document.getElementById('schedulePreview');
+    const exam = document.getElementById('inputExamDate').value;
+    const todayStr = getTodayLocalDateStr();
+    const show = (kind, text) => {
+      preview.className = `alert-box alert-${kind}`;
+      preview.textContent = text;
+      preview.style.display = 'block';
+    };
+
+    if (isAlreadyStartedMode()) {
+      const next = document.getElementById('inputNextClassDate').value;
+      const done = parseInt(document.getElementById('inputFinishedCount').value, 10);
+      if (!next || !exam || isNaN(done)) { preview.style.display = 'none'; return; }
+      if (done < 1 || done > 19) {
+        show('error', 'Enter how many classes are already done: a number from 1 to 19.');
+        return;
+      }
+      const left = 20 - done;
+      const dates = weekdaysFrom(next, exam, left);
+      if (!dates.length) {
+        show('error', 'The next class must be a weekday before the exam date.');
+        return;
+      }
+      const first = dates[0];
+      const last = dates[dates.length - 1];
+      const pastNote = first < todayStr
+        ? ' The next class date is in the past: any of those days not ticked will count as missed.'
+        : '';
+      if (dates.length < left) {
+        show('warning', `${done} attended classes will be recorded. Only ${dates.length} of the remaining ${left} classes fit before the exam (${formatDisplayDate(first)} to ${formatDisplayDate(last)}).` + pastNote);
+      } else {
+        show(pastNote ? 'warning' : 'info', `${done} attended classes will be recorded. The remaining ${left} classes run Monday to Friday from ${formatDisplayDate(first)} to ${formatDisplayDate(last)}.` + pastNote);
+      }
+      return;
+    }
+
+    const start = document.getElementById('inputStartDate').value;
+    if (!start || !exam) { preview.style.display = 'none'; return; }
+    if (start >= exam) {
+      show('error', 'The first class date must be before the exam date.');
+      return;
+    }
+    const dates = weekdaysFrom(start, exam, 20);
+    if (!dates.length) {
+      show('error', 'No weekdays fit before the exam date.');
+      return;
+    }
+    const pastDays = dates.filter(d => d < todayStr).length;
+    const pastNote = pastDays
+      ? ` The first class date is in the past: ${pastDays} class day(s) before today will count as missed. If this student already attended classes, choose "Already started" instead.`
+      : '';
+    const last = dates[dates.length - 1];
+    if (dates.length < 20) {
+      show('warning', `Only ${dates.length} of 20 classes (Mon–Fri) fit before the exam, last class ${formatDisplayDate(last)}.` + pastNote);
+    } else {
+      show(pastNote ? 'warning' : 'info', `20 classes (Mon–Fri) will be scheduled, from ${formatDisplayDate(dates[0])} to ${formatDisplayDate(last)}.` + pastNote);
+    }
+  }
+
+  ['inputStartDate', 'inputExamDate', 'inputNextClassDate'].forEach(id =>
+    document.getElementById(id).addEventListener('change', updateSchedulePreview));
   document.getElementById('inputFinishedCount').addEventListener('input', updateSchedulePreview);
+  document.getElementById('modeNew').addEventListener('change', applyStudentMode);
+  document.getElementById('modeStarted').addEventListener('change', applyStudentMode);
 
   function closeAddStudentModal() {
     modalAddStudent.style.display = 'none';
@@ -1206,23 +1254,36 @@
 
     const submitBtn = document.getElementById('btnSubmitAddStudent');
     const spinner = submitBtn.querySelector('.btn-spinner');
+    const showError = (msg) => {
+      formAddError.textContent = msg;
+      formAddError.style.display = 'block';
+    };
 
     const name = document.getElementById('inputStudentName').value.trim();
-    const startDate = document.getElementById('inputStartDate').value;
     const classTime = document.getElementById('inputClassTime').value;
     const examDate = document.getElementById('inputExamDate').value;
-    const finishedCount = parseInt(document.getElementById('inputFinishedCount').value, 10) || 0;
+    const started = isAlreadyStartedMode();
 
-    if (!name || !startDate || !classTime || !examDate) {
-      formAddError.textContent = 'Please fill out all required fields.';
-      formAddError.style.display = 'block';
+    if (!name || !classTime || !examDate) {
+      showError('Please fill in the name, class time and exam date.');
       return;
     }
 
-    if (startDate >= examDate) {
-      formAddError.textContent = 'Start date must be strictly before exam date.';
-      formAddError.style.display = 'block';
-      return;
+    const payload = { name, class_time: classTime, exam_date: examDate };
+    if (started) {
+      const nextClass = document.getElementById('inputNextClassDate').value;
+      const done = parseInt(document.getElementById('inputFinishedCount').value, 10);
+      if (!nextClass) { showError('Please choose the date of the next class.'); return; }
+      if (isNaN(done) || done < 1 || done > 19) { showError('Classes already finished must be a number from 1 to 19.'); return; }
+      if (nextClass >= examDate) { showError('The next class must be before the exam date.'); return; }
+      payload.next_class_date = nextClass;
+      payload.classes_already_finished = done;
+    } else {
+      const startDate = document.getElementById('inputStartDate').value;
+      if (!startDate) { showError('Please choose the first class date.'); return; }
+      if (startDate >= examDate) { showError('The first class date must be before the exam date.'); return; }
+      payload.start_date = startDate;
+      payload.classes_already_finished = 0;
     }
 
     try {
@@ -1232,13 +1293,7 @@
       const data = await apiRequest('/api/students', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name,
-          start_date: startDate,
-          class_time: classTime,
-          exam_date: examDate,
-          classes_already_finished: finishedCount
-        })
+        body: JSON.stringify(payload)
       });
 
       submitBtn.disabled = false;

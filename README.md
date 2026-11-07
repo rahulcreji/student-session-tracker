@@ -12,7 +12,7 @@ Live: https://student-session-tracker.the-language-formula.workers.dev
 
 | Scenario | Trigger | What happens |
 |---|---|---|
-| **A – Enroll student** | Add Student form | Up to 20 Mon–Fri classes from `start_date` at the student's class time. First *N* (`classes_already_finished`) are `Taken`, rest `Pending`. Only dates **strictly before** `exam_date` are generated. The new student's classes appear on the **Schedule** straight away (highlighted). |
+| **A – Enroll student** | Add Student form | Up to 20 Mon–Fri classes from `start_date` at the student's class time. First *N* (`classes_already_finished`) are `Taken`, rest `Pending`. Only dates **strictly before** `exam_date` are generated. **Already started:** the form sends `next_class_date` + *N* instead of `start_date`; the start date is set *N* weekdays before the next class, so the *N* finished classes are recorded just before it and the remaining 20 − *N* run Mon–Fri from the next class date. The new student's classes appear on the **Schedule** straight away (highlighted). |
 | **B – Missed** | Student not ticked | One makeup `Pending` class is added on the next free weekday after the latest Pending class (never on a day that has already passed) — **only if** that date is before the exam; otherwise the session is lost. |
 | **C – Weekend class** | “Add Weekend Class” on the student's profile | Sat/Sun row inserted as `Taken` (`is_weekend = 1`) and the student’s last `Pending` class is deleted (one atomic batch), so one class disappears from the end of the Schedule. |
 | **D – Taken** | Student ticked | Session → `Taken`. No dates move. |

@@ -375,7 +375,7 @@
       <div class="modal-header">
         <div>
           <h3>Enroll New Student</h3>
-          <p class="modal-subtext">Generates 20 weekday sessions ending before exam date</p>
+          <p class="modal-subtext">Plans 20 classes, Monday to Friday, before the exam date</p>
         </div>
         <button class="modal-close" id="btnCloseAddStudent" aria-label="Close">&times;</button>
       </div>
@@ -385,31 +385,50 @@
           <input type="text" id="inputStudentName" placeholder="e.g. Rahul Sharma" required autocomplete="off">
         </div>
 
-        <div class="form-row">
-          <div class="form-group">
-            <label for="inputStartDate">Course Start Date <span class="required">*</span></label>
-            <input type="date" id="inputStartDate" required>
-            <span class="field-hint">Weekdays are scheduled starting from this date</span>
-          </div>
+        <fieldset class="mode-switch">
+          <legend>Has this student already started classes?</legend>
+          <label class="mode-option" for="modeNew">
+            <input type="radio" name="studentMode" id="modeNew" value="new" checked>
+            <span><strong>New student</strong><small>Starting from their first class</small></span>
+          </label>
+          <label class="mode-option" for="modeStarted">
+            <input type="radio" name="studentMode" id="modeStarted" value="started">
+            <span><strong>Already started</strong><small>Some classes are already done</small></span>
+          </label>
+        </fieldset>
 
+        <!-- New student -->
+        <div class="form-group" id="groupStartDate">
+          <label for="inputStartDate">First Class Date <span class="required">*</span></label>
+          <input type="date" id="inputStartDate" required>
+          <span class="field-hint">Classes are planned Monday to Friday from this date</span>
+        </div>
+
+        <!-- Already started -->
+        <div class="form-row" id="groupStarted" hidden>
           <div class="form-group">
-            <label for="inputClassTime">Class Time <span class="required">*</span></label>
-            <input type="time" id="inputClassTime" required value="10:00">
-            <span class="field-hint">Daily schedule time</span>
+            <label for="inputFinishedCount">Classes Already Finished <span class="required">*</span></label>
+            <input type="number" id="inputFinishedCount" min="1" max="19" value="1" inputmode="numeric">
+            <span class="field-hint">How many of the 20 classes are done (1–19)</span>
+          </div>
+          <div class="form-group">
+            <label for="inputNextClassDate">Next Class Date <span class="required">*</span></label>
+            <input type="date" id="inputNextClassDate">
+            <span class="field-hint">The remaining classes continue Mon–Fri from here</span>
           </div>
         </div>
 
         <div class="form-row">
           <div class="form-group">
-            <label for="inputExamDate">Exam Date <span class="required">*</span></label>
-            <input type="date" id="inputExamDate" required>
-            <span class="field-hint">Cutoff: Sessions stop before this date</span>
+            <label for="inputClassTime">Class Time <span class="required">*</span></label>
+            <input type="time" id="inputClassTime" required value="10:00">
+            <span class="field-hint">Their usual time, used for every class</span>
           </div>
 
           <div class="form-group">
-            <label for="inputFinishedCount">Classes Already Finished</label>
-            <input type="number" id="inputFinishedCount" min="0" max="20" value="0">
-            <span class="field-hint">Initial sessions to mark as 'Taken' (0-20)</span>
+            <label for="inputExamDate">Exam Date <span class="required">*</span></label>
+            <input type="date" id="inputExamDate" required>
+            <span class="field-hint">No classes on or after this date</span>
           </div>
         </div>
 

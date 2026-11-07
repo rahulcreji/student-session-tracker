@@ -50,6 +50,11 @@ const TIME_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
  *  - Up to max_sessions (20) weekday (Mon-Fri) sessions from start_date.
  *  - First N (= classes_already_finished) are 'Taken', the rest 'Pending'.
  *  - Exam Cutoff Rule: only dates strictly before exam_date are generated.
+ *
+ * Students who already started: send `next_class_date` instead of `start_date`
+ * together with `classes_already_finished` = N. The N finished classes are recorded as
+ * Taken on the N weekdays just before the next class, and the remaining classes are
+ * scheduled Mon-Fri from the next class date.
  */
 export async function onRequestPost(context) {
   try {
@@ -78,20 +83,45 @@ export async function onRequestPost(context) {
       return error('Class time is required (HH:MM, 24-hour).', 400);
     }
 
-    const startDateObj = parseDate(start_date);
     const examDateObj = parseDate(exam_date);
-    if (!startDateObj) {
-      return error('Valid start date (YYYY-MM-DD) is required.', 400);
-    }
     if (!examDateObj) {
       return error('Valid exam date (YYYY-MM-DD) is required.', 400);
-    }
-    if (startDateObj.getTime() >= examDateObj.getTime()) {
-      return error('Start date must be before the exam date.', 400);
     }
 
     const finishedRaw = parseInt(body.classes_already_finished, 10);
     const classesFinished = Math.min(maxSessions, Math.max(0, isNaN(finishedRaw) ? 0 : finishedRaw));
+
+    let startDateObj;
+    if (body.next_class_date) {
+      // "Already started" student: N classes are done and the rest continue from next_class_date.
+      // Pick the start date so that exactly N weekdays fall before the next class; the loop below
+      // then records those N as Taken and schedules the remaining ones from the next class onward.
+      let firstRemaining = parseDate(body.next_class_date);
+      if (!firstRemaining) {
+        return error('Valid next class date (YYYY-MM-DD) is required.', 400);
+      }
+      if (classesFinished >= maxSessions) {
+        return error(`This student has already finished all ${maxSessions} classes.`, 400);
+      }
+      while (!isWeekday(firstRemaining)) firstRemaining = addDays(firstRemaining, 1);
+      if (firstRemaining.getTime() >= examDateObj.getTime()) {
+        return error('The next class must be before the exam date.', 400);
+      }
+      startDateObj = firstRemaining;
+      for (let done = 0; done < classesFinished; ) {
+        startDateObj = addDays(startDateObj, -1);
+        if (isWeekday(startDateObj)) done++;
+      }
+    } else {
+      startDateObj = parseDate(start_date);
+      if (!startDateObj) {
+        return error('Valid start date (YYYY-MM-DD) is required.', 400);
+      }
+    }
+
+    if (startDateObj.getTime() >= examDateObj.getTime()) {
+      return error('Start date must be before the exam date.', 400);
+    }
 
     // Build the schedule first so we never create a student with zero sessions.
     const schedule = [];
@@ -143,13 +173,17 @@ export async function onRequestPost(context) {
       notes.push(`only ${schedule.length} could be marked as already finished`);
     }
 
+    const remaining = schedule.filter(s => s.status === 'Pending');
+    const summary = body.next_class_date && remaining.length
+      ? `${trimmedName} added: ${classesFinished} attended class(es) recorded, ${remaining.length} remaining from ${remaining[0].date} to ${remaining[remaining.length - 1].date}.`
+      : `${trimmedName} enrolled with ${schedule.length} session(s).`;
+
     return json({
       success: true,
       student_id: studentId,
       sessions_created: schedule.length,
       capped_by_exam: schedule.length < maxSessions,
-      message: `${trimmedName} enrolled with ${schedule.length} session(s).` +
-        (notes.length ? ` Note: ${notes.join('; ')}.` : '')
+      message: summary + (notes.length ? ` Note: ${notes.join('; ')}.` : '')
     }, 201);
   } catch (err) {
     return error(`Failed to create student: ${err.message}`, 500);
