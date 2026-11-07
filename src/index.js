@@ -73,11 +73,6 @@ export default {
       return handleApiRequest(request, env);
     }
 
-    // Serve static assets from public/
-    if (env.ASSETS) {
-      return env.ASSETS.fetch(request);
-    }
-
     return new Response('Not found', { status: 404 });
   }
 };
