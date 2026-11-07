@@ -1,153 +1,116 @@
 # Student Session Tracker
 
-A responsive web application and daily dashboard for teachers to manage 20-session student courses, track weekday and weekend attendance, and automatically reschedule missed classes up to the exam cutoff date.
+A daily dashboard for a teacher to track 20-session student courses: tick the students who attended each day, see every student's upcoming classes on a week-by-week schedule, add **weekend** classes, and let the schedule recalculate automatically up to each student's exam date.
 
-Built with **Static HTML5/JS/CSS Frontend**, **Cloudflare Pages Functions**, and **Cloudflare D1 Database**.
+**Stack:** static HTML/CSS/Vanilla JS (`public/`) · Cloudflare Worker API (`src/index.js` → `functions/api/`) · Cloudflare D1 database (`DB` binding).
 
----
-
-## 📱 Responsive & Mobile-Ready Design
-- **Windows / Desktop**: Multi-column dashboard, sticky navigation, quick modal dialogues, keyboard accessibility (`Esc` to close).
-- **Mobile (iOS / Android)**: Touch-friendly tap buttons (minimum 44px), sticky bottom navigation bar, fluid responsive cards, no horizontal scroll.
+Live: https://student-session-tracker.the-language-formula.workers.dev
 
 ---
 
-## 🗄️ Database & Cloudflare Configuration
+## Business rules
 
-### Cloudflare D1 Database Binding
-Configured in `wrangler.toml`:
-```toml
-name = "student-session-tracker"
-compatibility_date = "2026-11-07"
-pages_build_output_dir = "public"
+| Scenario | Trigger | What happens |
+|---|---|---|
+| **A – Enroll student** | Add Student form | Up to 20 Mon–Fri classes from `start_date` at the student's class time. First *N* (`classes_already_finished`) are `Taken`, rest `Pending`. Only dates **strictly before** `exam_date` are generated. The new student's classes appear on the **Schedule** straight away (highlighted). |
+| **B – Missed** | Student not ticked | One makeup `Pending` class is added on the next free weekday after the latest Pending class (never on a day that has already passed) — **only if** that date is before the exam; otherwise the session is lost. |
+| **C – Weekend class** | “Add Weekend Class” on the student's profile | Sat/Sun row inserted as `Taken` (`is_weekend = 1`) and the student’s last `Pending` class is deleted (one atomic batch), so one class disappears from the end of the Schedule. |
+| **D – Taken** | Student ticked | Session → `Taken`. No dates move. |
 
-[[d1_databases]]
-binding = "DB"
-database_name = "student_sessions_db"
-database_id = "a06c70c4-02e6-4da2-a5a1-7127260b3f88"
-```
+### Daily workflow
 
-### Schema
-```sql
-CREATE TABLE students (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    start_date TEXT NOT NULL, 
-    class_time TEXT NOT NULL,
-    exam_date TEXT NOT NULL,
-    max_sessions INTEGER DEFAULT 20
-);
+1. **Today** page → open the **“Tick the students who attended”** checklist and tick each student who came.
+   Unticking today simply means “not ticked yet”.
+2. When the day is over, any class still **not ticked counts as not taken (Missed)** and a makeup class is added at the end
+   (Scenario B). This happens automatically the next time the app is opened (`POST /api/sessions/close-days`,
+   using the teacher's local date).
+3. **Schedule** page → every student's classes week by week (Mon–Fri; Sat/Sun columns only appear for extra classes),
+   with date, time, class number (#/20), 🏁 last class and 🎓 exam. Filter by student or show past weeks.
 
-CREATE TABLE sessions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    student_id INTEGER NOT NULL,
-    scheduled_date TEXT NOT NULL,
-    status TEXT DEFAULT 'Pending', -- 'Pending', 'Taken', or 'Missed'
-    is_weekend BOOLEAN DEFAULT 0,
-    FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
-);
-```
+### Correcting a past day
+
+Pick the date on the **Today** page and tick/untick:
+
+| Change | Effect on the schedule |
+|---|---|
+| Untick an attended class | Becomes Missed → makeup added (Scenario B) |
+| Tick a missed class | The class is given back, so if the student now has more than 20 active classes their last pending class (the makeup) is deleted. If the miss had been lost to the exam cutoff, nothing is deleted. |
+
+Future days can’t be ticked, and weekend classes aren’t changed from the checklist. Every update is conditional on the status that was just read, so double-clicks or two open tabs can’t apply a change twice or create duplicate makeup classes. Changes that move dates ask for confirmation.
 
 ---
 
-## ⚙️ Core Business Scenarios Implemented
+## API
 
-1. **Scenario A: Enrolling a Student (Initial Schedule)**
-   - Inputs: Name, Start Date, Class Time, Exam Date, Classes Already Finished.
-   - Generates up to 20 weekday sessions (Monday–Friday) starting from `start_date`.
-   - First *N* sessions are marked `'Taken'`, remaining are `'Pending'`.
-   - **Exam Cutoff Rule**: Stops generating dates strictly before `exam_date`.
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/health` | Checks the D1 binding and that both tables exist |
+| GET | `/api/dashboard?date=YYYY-MM-DD` | Classes on a date (+ class number and per-student counts) |
+| GET | `/api/schedule` | All students and all classes (Schedule view) |
+| GET / POST | `/api/students` | List students with metrics / create student (Scenario A) |
+| GET / DELETE | `/api/students/:id` | Profile + all sessions / delete student and sessions |
+| PATCH | `/api/sessions/:id` | `{ "status": "Taken" \| "Missed" \| "Pending" }` (Scenarios D / B, and corrections) |
+| POST | `/api/sessions/weekend` | `{ "student_id", "date" }` (Scenario C) |
+| POST | `/api/sessions/close-days` | `{ "today" }` — unticked classes from earlier days become Missed (+ makeups) |
 
-2. **Scenario B: Missed Weekday Class**
-   - Marks the session as `'Missed'`.
-   - Calculates the next available weekday after the student's latest pending session.
-   - **Exam Cutoff Rule**: If the new date is strictly before `exam_date`, inserts a new makeup `'Pending'` session at the end of the schedule. If it hits or passes the exam date, the session is not scheduled (lost).
+All responses are JSON: `{ "success": true, ... }` or `{ "success": false, "error": "..." }`.
 
-3. **Scenario C: Adding a Weekend Class**
-   - Adds a Saturday or Sunday session marked as `'Taken'` (`is_weekend = 1`).
-   - Automatically removes the student's *very last* scheduled pending session to keep total session count capped at 20.
-
-4. **Scenario D: Taken Weekday Class**
-   - Marks the session as `'Taken'`. No date shifts occur.
+The app always talks to D1. There is **no** offline/localStorage fallback, so data you see is always what is in the database. If the database can’t be reached, a red banner appears at the top of the page.
 
 ---
 
-## 🚀 Deployment Guide (GitHub to Cloudflare Pages)
+## Deploy (Cloudflare Workers, Git-connected)
 
-### Step 1: Initialize Git and Push to GitHub
+The repository is connected to a Cloudflare Worker whose build runs `npx wrangler deploy`. Pushing to `main` deploys automatically. `wrangler.toml` configures:
 
-In your project directory (`c:\Users\rahulr\soniya_fluxre`):
+- `main = "src/index.js"`: the API Worker
+- `[assets] directory = "./public"`: static frontend; `run_worker_first = ["/api/*"]` sends only API calls to the Worker
+- `[[d1_databases]] binding = "DB"`: `student_sessions_db` (`a06c70c4-02e6-4da2-a5a1-7127260b3f88`)
+
+### One-time: create the tables (only if the database is new/empty of tables)
 
 ```bash
-# Initialize git repository
-git init
-
-# Stage all files
-git add .
-
-# Initial commit
-git commit -m "Initial commit: Student Session Tracker with Cloudflare Pages Functions and responsive UI"
-
-# Create a new repository on GitHub (via GitHub UI or GitHub CLI), then link it:
-git remote add origin https://github.com/<YOUR-GITHUB-USERNAME>/<YOUR-REPO-NAME>.git
-git branch -M main
-git push -u origin main
+npx wrangler d1 execute student_sessions_db --remote --file=schema.sql
 ```
+
+`schema.sql` uses `CREATE TABLE IF NOT EXISTS`, so running it again is harmless.
+
+### Check the connection
+
+Open `https://<your-worker-url>/api/health`. It should return `{"success":true,"database":"connected"}`.
+
+### Run locally
+
+```bash
+npx wrangler d1 execute student_sessions_db --local --file=schema.sql   # first time only
+npx wrangler dev                                                        # http://localhost:8787
+```
+
+`wrangler dev` uses a local copy of D1, so testing never touches production data.
+
+> ⚠️ The app has no login. Anyone with the URL can view and change data. To restrict it, put the Worker behind **Cloudflare Access** (Zero Trust → Access → Applications → add your `workers.dev` hostname). This needs no code changes.
 
 ---
 
-### Step 2: Connect GitHub to Cloudflare Pages
+## Directory structure
 
-1. Log in to the [Cloudflare Dashboard](https://dash.cloudflare.com/).
-2. Navigate to **Workers & Pages** -> **Create application** -> **Pages** -> **Connect to Git**.
-3. Select your GitHub repository (`<YOUR-REPO-NAME>`).
-4. Configure Build & Deployment settings:
-   - **Project name:** `student-session-tracker` (or your preferred name)
-   - **Production branch:** `main`
-   - **Framework preset:** `None`
-   - **Build command:** *(leave empty)*
-   - **Build output directory:** `public`
-5. Click **Save and Deploy**.
-
----
-
-### Step 3: Link the D1 Database to Cloudflare Pages
-
-Even with `wrangler.toml`, Cloudflare Pages git deployments require linking the D1 binding in the dashboard settings:
-
-1. In the Cloudflare Dashboard, open your newly created Pages project: **Workers & Pages** -> **student-session-tracker**.
-2. Go to **Settings** -> **Functions** -> **D1 database bindings**.
-3. Click **Add binding**:
-   - **Variable name:** `DB`
-   - **D1 database:** Select `student_sessions_db` (ID: `a06c70c4-02e6-4da2-a5a1-7127260b3f88`)
-4. Click **Save**.
-5. Trigger a new deployment (or go to **Deployments** -> click the latest deployment -> **Retry deployment**) so the binding takes effect.
-
-Your site is now live with full serverless functionality!
-
----
-
-## 📁 Directory Structure
 ```
-├── functions/
-│   └── api/
-│       ├── _utils.js            # Shared date math and response helpers
-│       ├── dashboard.js         # GET /api/dashboard
-│       ├── students.js          # GET & POST /api/students
-│       ├── students/
-│       │   └── [id].js          # GET & DELETE /api/students/:id
-│       └── sessions/
-│           ├── [id].js          # PATCH /api/sessions/:id (Taken / Missed)
-│           └── weekend.js       # POST /api/sessions/weekend
-├── public/
-│   ├── css/
-│   │   └── style.css            # Responsive styles (Desktop & Mobile)
-│   ├── js/
-│   │   └── app.js               # Client application logic
-│   └── index.html               # Main single page application
-├── .gitignore
-├── README.md
-├── schema.sql                   # SQL schema reference
-└── wrangler.toml                # Cloudflare configuration
+├── src/index.js                 # Worker entry: routes /api/* to the handlers below
+├── functions/api/
+│   ├── _utils.js                # JSON helpers + UTC date math
+│   ├── _schedule.js             # Shared makeup-class logic (Scenario B)
+│   ├── schedule.js              # GET /api/schedule
+│   ├── health.js                # GET /api/health
+│   ├── dashboard.js             # GET /api/dashboard
+│   ├── students.js              # GET, POST /api/students        (Scenario A)
+│   ├── students/[id].js         # GET, DELETE /api/students/:id
+│   └── sessions/
+│       ├── [id].js              # PATCH /api/sessions/:id        (Scenarios B, D + corrections)
+│       ├── close-days.js        # POST /api/sessions/close-days  (unticked = missed)
+│       └── weekend.js           # POST /api/sessions/weekend     (Scenario C)
+├── public/                      # Static frontend (index.html, css/, js/)
+├── schema.sql                   # D1 schema
+└── wrangler.toml                # Worker + assets + D1 config
 ```
 
+The `functions/api` layout also matches Cloudflare Pages Functions file-based routing, so the same handlers would work on Pages.

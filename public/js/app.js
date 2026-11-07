@@ -1,7 +1,7 @@
 /**
  * Student Session Tracker - Client Application
  * Compatible with Desktop (Windows) & Mobile browsers
- * Connects to Cloudflare Pages Functions (/api/...) with automatic local offline demo support
+ * All data is read from / written to Cloudflare D1 through the /api/... endpoints.
  */
 
 (function () {
@@ -9,17 +9,23 @@
 
   // ================= State =================
   const state = {
-    currentView: 'dashboard', // 'dashboard' | 'students' | 'profile'
+    currentView: 'dashboard', // 'dashboard' | 'schedule' | 'students' | 'profile'
+    closedThrough: null,       // local date for which past unticked classes were already closed
+    scheduleData: null,        // { students, sessions } for the Schedule view
+    highlightStudentId: null,  // newly added student to highlight in the Schedule
+    attendancePreselectStudentId: null,
     selectedDate: getTodayLocalDateStr(),
     currentStudentId: null,
     currentStudentData: null,
     studentsList: [],
-    isOfflineMode: false
+    calendarMonth: null,        // 'YYYY-MM' shown in the profile calendar
+    calendarSelectedDate: null  // 'YYYY-MM-DD' whose details are shown under the calendar
   };
 
   // ================= DOM Elements =================
   const views = {
     dashboard: document.getElementById('viewDashboard'),
+    schedule: document.getElementById('viewSchedule'),
     students: document.getElementById('viewStudents'),
     profile: document.getElementById('viewProfile')
   };
@@ -27,6 +33,8 @@
   // Nav buttons
   const tabDashboard = document.getElementById('tabDashboard');
   const tabStudents = document.getElementById('tabStudents');
+  const tabSchedule = document.getElementById('tabSchedule');
+  const mobTabSchedule = document.getElementById('mobTabSchedule');
   const mobTabDashboard = document.getElementById('mobTabDashboard');
   const mobTabStudents = document.getElementById('mobTabStudents');
   const todayPendingCount = document.getElementById('todayPendingCount');
@@ -61,7 +69,18 @@
   const btnRefreshDashboard = document.getElementById('btnRefreshDashboard');
   const dashboardLoading = document.getElementById('dashboardLoading');
   const dashboardEmpty = document.getElementById('dashboardEmpty');
-  const dashboardCards = document.getElementById('dashboardCards');
+  const attendanceChecklist = document.getElementById('attendanceChecklist');
+  const checklistCount = document.getElementById('checklistCount');
+  const checklistHint = document.getElementById('checklistHint');
+  const checklistItems = document.getElementById('checklistItems');
+
+  // Schedule view
+  const scheduleFilter = document.getElementById('scheduleFilter');
+  const schedulePastToggle = document.getElementById('schedulePastToggle');
+  const scheduleLoading = document.getElementById('scheduleLoading');
+  const scheduleEmpty = document.getElementById('scheduleEmpty');
+  const scheduleWeeks = document.getElementById('scheduleWeeks');
+  const scheduleSubtext = document.getElementById('scheduleSubtext');
   const dayTotal = document.getElementById('dayTotal');
   const dayPending = document.getElementById('dayPending');
   const dayTaken = document.getElementById('dayTaken');
@@ -94,7 +113,16 @@
   const sessionsTimeline = document.getElementById('sessionsTimeline');
   const profileSessionsLoading = document.getElementById('profileSessionsLoading');
 
+  // Profile calendar
+  const calendarGrid = document.getElementById('calendarGrid');
+  const calendarDayDetail = document.getElementById('calendarDayDetail');
+  const calTitle = document.getElementById('calTitle');
+  const calPrev = document.getElementById('calPrev');
+  const calNext = document.getElementById('calNext');
+  const calToday = document.getElementById('calToday');
+
   const toastContainer = document.getElementById('toastContainer');
+  const connectionBanner = document.getElementById('connectionBanner');
 
   // ================= Date Utilities =================
   function getTodayLocalDateStr() {
@@ -153,18 +181,12 @@
     return day === 0 || day === 6;
   }
 
-  function isWeekdayStr(dateStr) {
-    const d = parseLocalDate(dateStr);
-    const day = d.getUTCDay();
-    return day >= 1 && day <= 5;
-  }
-
-  function getNextWeekdayStr(dateStr) {
-    let curr = offsetDays(dateStr, 1);
-    while (!isWeekdayStr(curr)) {
-      curr = offsetDays(curr, 1);
-    }
-    return curr;
+  // Whole days from local "today" to dateStr (negative = in the past)
+  function daysFromToday(dateStr) {
+    const target = parseLocalDate(dateStr);
+    const today = parseLocalDate(getTodayLocalDateStr());
+    if (!target || !today) return null;
+    return Math.round((target - today) / 86400000);
   }
 
   // ================= Toast Notifications =================
@@ -196,301 +218,61 @@
       .replace(/"/g, '&quot;');
   }
 
-  // ================= Local Mock Fallback Store (for offline / file:// preview) =================
-  const MOCK_STORAGE_KEY = 'student_session_tracker_mock_db';
-
-  function getMockStore() {
-    try {
-      const data = localStorage.getItem(MOCK_STORAGE_KEY);
-      if (data) return JSON.parse(data);
-    } catch { }
-
-    // Seed with a starter student for initial preview
-    const today = getTodayLocalDateStr();
-    const mockData = {
-      students: [
-        {
-          id: 1,
-          name: "Rahul S.",
-          start_date: today,
-          class_time: "10:00",
-          exam_date: offsetDays(today, 32),
-          max_sessions: 20
-        }
-      ],
-      sessions: []
-    };
-
-    // Generate 20 weekday sessions for initial student
-    let curr = today;
-    let sId = 1;
-    while (mockData.sessions.length < 20) {
-      if (curr >= mockData.students[0].exam_date) break;
-      if (isWeekdayStr(curr)) {
-        mockData.sessions.push({
-          id: sId++,
-          student_id: 1,
-          scheduled_date: curr,
-          status: mockData.sessions.length < 3 ? 'Taken' : 'Pending',
-          is_weekend: 0
-        });
-      }
-      curr = offsetDays(curr, 1);
-    }
-
-    saveMockStore(mockData);
-    return mockData;
-  }
-
-  function saveMockStore(data) {
-    try {
-      localStorage.setItem(MOCK_STORAGE_KEY, JSON.stringify(data));
-    } catch { }
-  }
-
-  async function mockApiCall(url, options = {}) {
-    const method = (options.method || 'GET').toUpperCase();
-    const store = getMockStore();
-    const urlObj = new URL(url, 'http://localhost');
-    const path = urlObj.pathname;
-
-    // GET /api/dashboard
-    if (path === '/api/dashboard' && method === 'GET') {
-      const date = urlObj.searchParams.get('date') || getTodayLocalDateStr();
-      const sessions = store.sessions
-        .filter(s => s.scheduled_date === date)
-        .map(s => {
-          const student = store.students.find(st => st.id === s.student_id) || {};
-          const allStudentSessions = store.sessions.filter(ses => ses.student_id === s.student_id);
-          return {
-            session_id: s.id,
-            student_id: s.student_id,
-            scheduled_date: s.scheduled_date,
-            status: s.status,
-            is_weekend: s.is_weekend,
-            student_name: student.name || 'Unknown',
-            class_time: student.class_time || '10:00',
-            start_date: student.start_date,
-            exam_date: student.exam_date,
-            completed_count: allStudentSessions.filter(x => x.status === 'Taken').length,
-            missed_count: allStudentSessions.filter(x => x.status === 'Missed').length,
-            pending_count: allStudentSessions.filter(x => x.status === 'Pending').length,
-            total_sessions: allStudentSessions.length
-          };
-        });
-
-      return {
-        success: true,
-        date,
-        summary: {
-          total: sessions.length,
-          pending: sessions.filter(x => x.status === 'Pending').length,
-          taken: sessions.filter(x => x.status === 'Taken').length,
-          missed: sessions.filter(x => x.status === 'Missed').length
-        },
-        sessions
-      };
-    }
-
-    // GET /api/students
-    if (path === '/api/students' && method === 'GET') {
-      const students = store.students.map(st => {
-        const studentSessions = store.sessions.filter(ses => ses.student_id === st.id);
-        const dates = studentSessions.map(x => x.scheduled_date).sort();
-        const pendingSessions = studentSessions.filter(x => x.status === 'Pending').sort((a,b) => a.scheduled_date.localeCompare(b.scheduled_date));
-        return {
-          id: st.id,
-          name: st.name,
-          start_date: st.start_date,
-          class_time: st.class_time,
-          exam_date: st.exam_date,
-          max_sessions: st.max_sessions,
-          completed_count: studentSessions.filter(x => x.status === 'Taken').length,
-          missed_count: studentSessions.filter(x => x.status === 'Missed').length,
-          pending_count: studentSessions.filter(x => x.status === 'Pending').length,
-          total_sessions: studentSessions.length,
-          expected_end_date: dates.length > 0 ? dates[dates.length - 1] : null,
-          next_pending_date: pendingSessions.length > 0 ? pendingSessions[0].scheduled_date : null
-        };
-      });
-      return { success: true, students };
-    }
-
-    // POST /api/students
-    if (path === '/api/students' && method === 'POST') {
-      const body = JSON.parse(options.body || '{}');
-      const newId = store.students.length ? Math.max(...store.students.map(s => s.id)) + 1 : 1;
-      const newStudent = {
-        id: newId,
-        name: body.name.trim(),
-        start_date: body.start_date,
-        class_time: body.class_time,
-        exam_date: body.exam_date,
-        max_sessions: 20
-      };
-      store.students.push(newStudent);
-
-      let currDate = body.start_date;
-      const finished = Number(body.classes_already_finished) || 0;
-      let nextSessId = store.sessions.length ? Math.max(...store.sessions.map(s => s.id)) + 1 : 1;
-      let count = 0;
-
-      while (count < 20) {
-        if (currDate >= body.exam_date) break;
-        if (isWeekdayStr(currDate)) {
-          store.sessions.push({
-            id: nextSessId++,
-            student_id: newId,
-            scheduled_date: currDate,
-            status: count < finished ? 'Taken' : 'Pending',
-            is_weekend: 0
-          });
-          count++;
-        }
-        currDate = offsetDays(currDate, 1);
-      }
-
-      saveMockStore(store);
-      return { success: true, student_id: newId, message: `Student created with ${count} sessions scheduled.` };
-    }
-
-    // GET /api/students/:id
-    const studentMatch = path.match(/^\/api\/students\/(\d+)$/);
-    if (studentMatch && method === 'GET') {
-      const id = parseInt(studentMatch[1], 10);
-      const student = store.students.find(s => s.id === id);
-      if (!student) return { success: false, error: 'Student not found' };
-
-      const sessions = store.sessions.filter(s => s.student_id === id).sort((a,b) => a.scheduled_date.localeCompare(b.scheduled_date));
-      const dates = sessions.map(s => s.scheduled_date);
-      const pendingDates = sessions.filter(s => s.status === 'Pending').map(s => s.scheduled_date);
-
-      return {
-        success: true,
-        student,
-        metrics: {
-          total_sessions: sessions.length,
-          max_sessions: student.max_sessions,
-          completed_count: sessions.filter(s => s.status === 'Taken').length,
-          missed_count: sessions.filter(s => s.status === 'Missed').length,
-          pending_count: sessions.filter(s => s.status === 'Pending').length,
-          expected_end_date: dates.length > 0 ? dates[dates.length - 1] : null,
-          next_pending_date: pendingDates.length > 0 ? pendingDates[0] : null,
-          days_until_exam: Math.round((parseLocalDate(student.exam_date) - parseLocalDate(getTodayLocalDateStr())) / (1000 * 60 * 60 * 24))
-        },
-        sessions
-      };
-    }
-
-    // DELETE /api/students/:id
-    if (studentMatch && method === 'DELETE') {
-      const id = parseInt(studentMatch[1], 10);
-      store.students = store.students.filter(s => s.id !== id);
-      store.sessions = store.sessions.filter(s => s.student_id !== id);
-      saveMockStore(store);
-      return { success: true, message: 'Student deleted' };
-    }
-
-    // PATCH /api/sessions/:id
-    const sessionMatch = path.match(/^\/api\/sessions\/(\d+)$/);
-    if (sessionMatch && method === 'PATCH') {
-      const id = parseInt(sessionMatch[1], 10);
-      const session = store.sessions.find(s => s.id === id);
-      if (!session) return { success: false, error: 'Session not found' };
-
-      const body = JSON.parse(options.body || '{}');
-      const student = store.students.find(s => s.id === session.student_id);
-
-      if (body.status === 'Taken') {
-        session.status = 'Taken';
-        saveMockStore(store);
-        return { success: true, message: `Class marked as Taken.` };
-      }
-
-      if (body.status === 'Missed') {
-        session.status = 'Missed';
-        // Find max pending scheduled_date
-        const pendingSessions = store.sessions.filter(s => s.student_id === session.student_id && s.status === 'Pending');
-        const baseDate = pendingSessions.length > 0
-          ? pendingSessions.map(s => s.scheduled_date).sort().reverse()[0]
-          : session.scheduled_date;
-
-        const nextWeekday = getNextWeekdayStr(baseDate);
-
-        if (nextWeekday < student.exam_date) {
-          const newId = store.sessions.length ? Math.max(...store.sessions.map(s => s.id)) + 1 : 1;
-          store.sessions.push({
-            id: newId,
-            student_id: session.student_id,
-            scheduled_date: nextWeekday,
-            status: 'Pending',
-            is_weekend: 0
-          });
-          saveMockStore(store);
-          return { success: true, status: 'Missed', rescheduled: true, message: `Marked as Missed. Added makeup class on ${nextWeekday}.` };
-        } else {
-          saveMockStore(store);
-          return { success: true, status: 'Missed', rescheduled: false, message: `Marked as Missed. Cannot reschedule: reached exam cutoff (${student.exam_date}). Session lost.` };
-        }
-      }
-    }
-
-    // POST /api/sessions/weekend
-    if (path === '/api/sessions/weekend' && method === 'POST') {
-      const body = JSON.parse(options.body || '{}');
-      const studentId = parseInt(body.student_id, 10);
-      const date = body.date;
-      const student = store.students.find(s => s.id === studentId);
-      if (!student) return { success: false, error: 'Student not found' };
-
-      // Add weekend class
-      const newId = store.sessions.length ? Math.max(...store.sessions.map(s => s.id)) + 1 : 1;
-      store.sessions.push({
-        id: newId,
-        student_id: studentId,
-        scheduled_date: date,
-        status: 'Taken',
-        is_weekend: 1
-      });
-
-      // Remove last scheduled pending class to cap at 20
-      const pending = store.sessions.filter(s => s.student_id === studentId && s.status === 'Pending');
-      let removedInfo = null;
-      if (pending.length > 0) {
-        pending.sort((a,b) => b.scheduled_date.localeCompare(a.scheduled_date));
-        const toRemove = pending[0];
-        store.sessions = store.sessions.filter(s => s.id !== toRemove.id);
-        removedInfo = { id: toRemove.id, scheduled_date: toRemove.scheduled_date };
-      }
-
-      saveMockStore(store);
-      return {
-        success: true,
-        message: removedInfo
-          ? `Added weekend class on ${date}. Removed last pending class on ${removedInfo.scheduled_date} to keep total capped at 20.`
-          : `Added weekend class on ${date}.`
-      };
-    }
-
-    return { success: false, error: 'Endpoint not matched' };
-  }
-
-  // Unified API client that automatically switches to Mock Store when running locally or on file://
+  // ================= API Client (Cloudflare Worker + D1) =================
+  // Every call goes to the real backend. There is deliberately NO offline/localStorage
+  // fallback: silently saving to the browser would make the teacher believe data was
+  // stored in the database when it was not.
   async function apiRequest(url, options = {}) {
     if (window.location.protocol === 'file:') {
-      return await mockApiCall(url, options);
+      throw new Error('Open the app through the server (npx wrangler dev, or the deployed URL) — not by double-clicking index.html.');
     }
 
+    let res;
     try {
-      const res = await fetch(url, options);
-      if (res.status === 404 || res.status === 502 || res.status === 503) {
-        // Fallback to local mock if server functions are not deployed locally
-        return await mockApiCall(url, options);
-      }
-      return await res.json();
+      res = await fetch(url, { cache: 'no-store', ...options });
     } catch {
-      // Network failure (offline or local without server) -> fallback to mock
-      return await mockApiCall(url, options);
+      throw new Error('Cannot reach the server. Check your internet connection and try again.');
+    }
+
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      // Non-JSON response (e.g. HTML error page)
+    }
+
+    if (!data) {
+      throw new Error(`Server returned an unexpected response (HTTP ${res.status}).`);
+    }
+    if (!res.ok || data.success === false) {
+      const err = new Error(data.error || `Request failed (HTTP ${res.status}).`);
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  }
+
+  // Health check: confirms the Worker can talk to D1 and the tables exist.
+  async function checkConnection() {
+    try {
+      await apiRequest('/api/health');
+      connectionBanner.style.display = 'none';
+    } catch (err) {
+      connectionBanner.textContent = `⚠ Database connection problem: ${err.message}`;
+      connectionBanner.style.display = 'block';
+    }
+  }
+
+  // Disables every button/checkbox inside `container` while `task` runs (prevents double-clicks),
+  // then restores each control's previous state.
+  async function withButtonsDisabled(container, task) {
+    const controls = container ? Array.from(container.querySelectorAll('button, input')) : [];
+    const before = controls.map(c => c.disabled);
+    controls.forEach(c => { c.disabled = true; });
+    try {
+      return await task();
+    } finally {
+      controls.forEach((c, i) => { c.disabled = before[i]; });
     }
   }
 
@@ -505,18 +287,20 @@
       }
     });
 
-    // Update Desktop Tabs
+    const inStudents = viewName === 'students' || viewName === 'profile';
     tabDashboard.classList.toggle('active', viewName === 'dashboard');
-    tabStudents.classList.toggle('active', viewName === 'students' || viewName === 'profile');
-
-    // Update Mobile Bottom Nav
+    tabSchedule.classList.toggle('active', viewName === 'schedule');
+    tabStudents.classList.toggle('active', inStudents);
     mobTabDashboard.classList.toggle('active', viewName === 'dashboard');
-    mobTabStudents.classList.toggle('active', viewName === 'students' || viewName === 'profile');
+    mobTabSchedule.classList.toggle('active', viewName === 'schedule');
+    mobTabStudents.classList.toggle('active', inStudents);
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
     if (viewName === 'dashboard') {
       loadDashboard();
+    } else if (viewName === 'schedule') {
+      loadSchedule();
     } else if (viewName === 'students') {
       loadStudents();
     } else if (viewName === 'profile') {
@@ -527,13 +311,36 @@
     }
   }
 
-  // ================= View 1: Daily Dashboard =================
+  // ================= Close past days =================
+  // "If the teacher didn't tick a student, the class was not taken."
+  // Classes from earlier days that are still unticked become Missed on the server
+  // (and get a makeup class). Runs once per day per open tab, before data is shown.
+  let closeDaysPromise = null;
+  function ensurePastDaysClosed() {
+    const today = getTodayLocalDateStr();
+    if (state.closedThrough === today) return Promise.resolve();
+    if (closeDaysPromise) return closeDaysPromise;
+
+    closeDaysPromise = apiRequest('/api/sessions/close-days', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ today })
+    })
+      .then(data => {
+        state.closedThrough = today;
+        if (data.closed > 0) showToast(data.message, 'info');
+      })
+      .catch(err => showToast(`Could not update earlier days: ${err.message}`, 'error'))
+      .finally(() => { closeDaysPromise = null; });
+    return closeDaysPromise;
+  }
+
+  // ================= View 1: Today (attendance checklist) =================
   async function loadDashboard() {
     dashboardLoading.style.display = 'flex';
     dashboardEmpty.style.display = 'none';
-    dashboardCards.innerHTML = '';
+    attendanceChecklist.style.display = 'none';
 
-    // Update date controls
     dashboardDatePicker.value = state.selectedDate;
     const todayStr = getTodayLocalDateStr();
     if (state.selectedDate === todayStr) {
@@ -544,29 +351,22 @@
       dashboardDateTitle.textContent = formatDisplayDate(state.selectedDate);
     }
 
+    const requestedDate = state.selectedDate;
     try {
-      const data = await apiRequest(`/api/dashboard?date=${encodeURIComponent(state.selectedDate)}`);
+      await ensurePastDaysClosed();
+      const data = await apiRequest(`/api/dashboard?date=${encodeURIComponent(requestedDate)}`);
+      if (requestedDate !== state.selectedDate) return; // teacher moved to another day meanwhile
       dashboardLoading.style.display = 'none';
 
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to load dashboard data');
-      }
-
-      // Update Summary metrics
       dayTotal.textContent = data.summary?.total || 0;
       dayPending.textContent = data.summary?.pending || 0;
       dayTaken.textContent = data.summary?.taken || 0;
       dayMissed.textContent = data.summary?.missed || 0;
 
-      // Update badge if viewing today
-      if (state.selectedDate === todayStr) {
+      if (requestedDate === todayStr) {
         const count = data.summary?.pending || 0;
-        if (count > 0) {
-          todayPendingCount.textContent = count;
-          todayPendingCount.style.display = 'inline-block';
-        } else {
-          todayPendingCount.style.display = 'none';
-        }
+        todayPendingCount.textContent = count;
+        todayPendingCount.style.display = count > 0 ? 'inline-block' : 'none';
       }
 
       if (!data.sessions || data.sessions.length === 0) {
@@ -574,112 +374,329 @@
         return;
       }
 
-      renderDashboardCards(data.sessions);
-
+      renderChecklist(data.sessions);
     } catch (err) {
       dashboardLoading.style.display = 'none';
       showToast(`Error: ${err.message}`, 'error');
     }
   }
 
-  function renderDashboardCards(sessions) {
-    dashboardCards.innerHTML = '';
+  /**
+   * Checklist dropdown. Tick = attended (Taken).
+   * Untick on TODAY = not ticked yet (Pending; becomes Missed when the day is over).
+   * Untick on a PAST day = not attended (Missed, makeup added).
+   * Ticking a past Missed class gives the class back (its makeup is removed).
+   */
+  function renderChecklist(sessions) {
+    const todayStr = getTodayLocalDateStr();
+    const day = state.selectedDate;
+    const isFuture = day > todayStr;
+    const isPast = day < todayStr;
+    const attended = sessions.filter(s => s.status === 'Taken').length;
 
-    sessions.forEach(session => {
-      const card = document.createElement('div');
-      card.className = 'student-card';
+    checklistCount.textContent = `${attended} of ${sessions.length} attended`;
+    checklistHint.textContent = isFuture
+      ? 'This day is in the future. Students can be ticked on the day of their class.'
+      : isPast
+        ? 'Past day: tick students who attended. Anyone left unticked counted as missed, and a makeup class was added at the end of their schedule.'
+        : 'Tick each student who attended. Anyone not ticked by the end of today counts as missed, and a makeup class is added at the end of their schedule.';
 
-      const isPending = session.status === 'Pending';
-      const isTaken = session.status === 'Taken';
-      const isMissed = session.status === 'Missed';
+    checklistItems.innerHTML = '';
+    let focusRow = null;
 
-      const statusClass = isPending ? 'status-pending' : (isTaken ? 'status-taken' : 'status-missed');
-      const formattedTime = formatTimeDisplay(session.class_time);
+    sessions.forEach(s => {
+      const checked = s.status === 'Taken';
+      const disabled = isFuture || !!s.is_weekend;
+      const stateClass = s.status === 'Taken' ? 'ci-taken' : s.status === 'Missed' ? 'ci-missed' : (isFuture ? 'ci-upcoming' : 'ci-open');
+      const statusText = s.status === 'Taken' ? 'Attended'
+        : s.status === 'Missed' ? 'Missed'
+        : isFuture ? 'Upcoming' : 'Not ticked yet';
+      const meta = s.status === 'Missed'
+        ? 'not counted'
+        : `Class ${s.class_number} of ${s.max_sessions || 20}`;
 
-      card.innerHTML = `
-        <div class="card-top">
-          <div>
-            <h3 class="card-student-name" data-student-id="${session.student_id}">${escapeHtml(session.student_name)}</h3>
-            <span class="card-time-badge">⏰ ${escapeHtml(formattedTime)}</span>
-          </div>
-          <span class="card-status-badge ${statusClass}">${session.status}</span>
-        </div>
-
-        <div class="card-meta">
-          <div class="card-meta-row">
-            <span>Course Progress</span>
-            <strong>${session.completed_count} / ${session.total_sessions} Completed</strong>
-          </div>
-          <div class="card-meta-row">
-            <span>Sessions Remaining</span>
-            <span>${session.pending_count} pending</span>
-          </div>
-          ${session.is_weekend ? '<div class="card-meta-row"><span class="tag-weekend">Weekend Session</span></div>' : ''}
-        </div>
-
-        <div class="card-actions">
-          ${isPending ? `
-            <button class="btn-card-action btn-card-taken" data-action="take" data-session-id="${session.session_id}">
-              ✓ Taken
-            </button>
-            <button class="btn-card-action btn-card-missed" data-action="miss" data-session-id="${session.session_id}">
-              ✕ Missed
-            </button>
-          ` : `
-            <button class="btn-card-action btn-secondary" style="grid-column: span 2;" data-action="view-profile" data-student-id="${session.student_id}">
-              View Student Profile & Calendar
-            </button>
-          `}
-        </div>
+      const li = document.createElement('li');
+      li.className = `checklist-item ${stateClass}`;
+      li.innerHTML = `
+        <label class="ci-label">
+          <input type="checkbox" class="ci-check" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}
+                 aria-label="${escapeHtml(s.student_name)} attended">
+          <span class="ci-time">${escapeHtml(formatTimeDisplay(s.class_time))}</span>
+          <span class="ci-name">${escapeHtml(s.student_name)}</span>
+          <span class="ci-meta">${meta}${s.is_weekend ? ' · <span class="tag-weekend">Extra weekend class</span>' : ''}</span>
+        </label>
+        <span class="ci-status">${statusText}</span>
+        <button type="button" class="ci-cal" title="Open ${escapeHtml(s.student_name)}'s calendar" aria-label="Open ${escapeHtml(s.student_name)}'s calendar">📅</button>
       `;
 
-      card.querySelector('.card-student-name').addEventListener('click', () => {
-        switchView('profile', session.student_id);
-      });
+      const box = li.querySelector('.ci-check');
+      box.addEventListener('change', () => onChecklistToggle(s, box));
+      li.querySelector('.ci-cal').addEventListener('click', () => switchView('profile', s.student_id));
 
-      const btnTake = card.querySelector('[data-action="take"]');
-      if (btnTake) {
-        btnTake.addEventListener('click', () => updateSessionStatus(session.session_id, 'Taken'));
+      if (state.attendancePreselectStudentId && String(s.student_id) === String(state.attendancePreselectStudentId)) {
+        li.classList.add('is-focus');
+        focusRow = li;
       }
-
-      const btnMiss = card.querySelector('[data-action="miss"]');
-      if (btnMiss) {
-        btnMiss.addEventListener('click', () => updateSessionStatus(session.session_id, 'Missed'));
-      }
-
-      const btnView = card.querySelector('[data-action="view-profile"]');
-      if (btnView) {
-        btnView.addEventListener('click', () => switchView('profile', session.student_id));
-      }
-
-      dashboardCards.appendChild(card);
+      checklistItems.appendChild(li);
     });
+
+    state.attendancePreselectStudentId = null;
+    attendanceChecklist.style.display = 'block';
+    if (focusRow) {
+      attendanceChecklist.open = true;
+      setTimeout(() => focusRow.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+    }
   }
 
-  async function updateSessionStatus(sessionId, status) {
+  async function onChecklistToggle(s, box) {
+    const isPast = state.selectedDate < getTodayLocalDateStr();
+    const target = box.checked ? 'Taken' : (isPast ? 'Missed' : 'Pending');
+    const done = await updateSessionStatus(s.session_id, target, {
+      container: attendanceChecklist,
+      studentName: s.student_name,
+      date: s.scheduled_date,
+      fromStatus: s.status
+    });
+    if (!done) box.checked = !box.checked; // teacher cancelled the confirmation
+  }
+
+  function refreshCurrentView() {
+    if (state.currentView === 'dashboard') {
+      loadDashboard();
+    } else if (state.currentView === 'schedule') {
+      loadSchedule();
+    } else if (state.currentView === 'profile' && state.currentStudentId) {
+      loadStudentProfile(state.currentStudentId);
+    }
+  }
+
+  /**
+   * Only changes that MOVE DATES ask for confirmation:
+   * marking a class missed (adds a makeup) or giving a missed class back (removes one).
+   */
+  function confirmStatusChange(status, ctx) {
+    const from = ctx.fromStatus || 'Pending';
+    if (status !== 'Missed' && from !== 'Missed') return true;
+
+    const who = ctx.studentName ? `${ctx.studentName}` : 'This student';
+    const when = ctx.date ? ` on ${formatDisplayDate(ctx.date)}` : '';
+    if (status === 'Missed') {
+      return confirm(
+        `${who} did NOT attend the class${when}?\n\n` +
+        'One makeup class will be added at the end of the schedule (at the usual time) if there is a free weekday before the exam.'
+      );
+    }
+    return confirm(
+      `${who} DID attend the class${when}?\n\n` +
+      'The class is given back, so the extra makeup class at the end of the schedule will be removed.'
+    );
+  }
+
+  /** Returns true if the request was sent, false if the teacher cancelled. */
+  async function updateSessionStatus(sessionId, status, ctx = {}) {
+    if (!confirmStatusChange(status, ctx)) return false;
+
     try {
-      const data = await apiRequest(`/api/sessions/${sessionId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status })
-      });
+      const data = await withButtonsDisabled(ctx.container, () =>
+        apiRequest(`/api/sessions/${sessionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status, today: getTodayLocalDateStr() })
+        })
+      );
 
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to update session');
-      }
-
-      showToast(data.message || `Session marked as ${status}`, 'success');
-
-      if (state.currentView === 'dashboard') {
-        loadDashboard();
-      } else if (state.currentView === 'profile' && state.currentStudentId) {
-        loadStudentProfile(state.currentStudentId);
-      }
-
+      const lost = status === 'Missed' && data.rescheduled === false && data.exam_cutoff_reached;
+      showToast(data.message || `Saved`, lost ? 'error' : 'success');
     } catch (err) {
       showToast(`Action failed: ${err.message}`, 'error');
     }
+
+    // Always refresh so the screen matches the database (also after a 409 conflict).
+    refreshCurrentView();
+    return true;
   }
+
+  // ================= View: Schedule (all students, week by week) =================
+  function mondayOf(dateStr) {
+    const dow = (parseLocalDate(dateStr).getUTCDay() + 6) % 7; // Mon = 0
+    return offsetDays(dateStr, -dow);
+  }
+
+  function shortDay(dateStr) {
+    const d = parseLocalDate(dateStr);
+    return {
+      weekday: d.toLocaleDateString(undefined, { timeZone: 'UTC', weekday: 'short' }),
+      date: d.toLocaleDateString(undefined, { timeZone: 'UTC', day: 'numeric', month: 'short' })
+    };
+  }
+
+  async function loadSchedule() {
+    scheduleLoading.style.display = 'flex';
+    scheduleEmpty.style.display = 'none';
+    scheduleWeeks.innerHTML = '';
+
+    try {
+      await ensurePastDaysClosed();
+      const data = await apiRequest('/api/schedule');
+      scheduleLoading.style.display = 'none';
+      state.scheduleData = data;
+
+      // Student filter (keep the current choice if that student still exists)
+      const current = scheduleFilter.value;
+      scheduleFilter.innerHTML = '<option value="">All students</option>' +
+        data.students.map(st => `<option value="${st.id}">${escapeHtml(st.name)} (${escapeHtml(formatTimeDisplay(st.class_time))})</option>`).join('');
+      if (data.students.some(st => String(st.id) === current)) scheduleFilter.value = current;
+
+      renderSchedule();
+    } catch (err) {
+      scheduleLoading.style.display = 'none';
+      showToast(`Error: ${err.message}`, 'error');
+    }
+  }
+
+  function renderSchedule() {
+    const data = state.scheduleData;
+    if (!data) return;
+    const todayStr = getTodayLocalDateStr();
+    const filterId = scheduleFilter.value;
+    const showPast = schedulePastToggle.checked;
+    const studentById = new Map(data.students.map(st => [st.id, st]));
+
+    // Class numbers (#1..#20, Missed not counted) and each student's last class
+    const classNo = new Map();
+    const lastClassId = new Map();
+    const counters = new Map();
+    data.sessions.forEach(s => {
+      if (s.status === 'Missed') return;
+      const n = (counters.get(s.student_id) || 0) + 1;
+      counters.set(s.student_id, n);
+      classNo.set(s.id, n);
+      lastClassId.set(s.student_id, s.id);
+    });
+
+    const visibleStudents = data.students.filter(st => !filterId || String(st.id) === filterId);
+    const visibleIds = new Set(visibleStudents.map(st => st.id));
+    const visibleSessions = data.sessions.filter(s => visibleIds.has(s.student_id));
+
+    const allDates = visibleSessions.map(s => s.scheduled_date);
+    const firstDate = showPast && allDates.length ? allDates[0] : todayStr;
+    const startWeek = mondayOf(firstDate < todayStr ? firstDate : todayStr);
+
+    // Group classes + exam days by date
+    const byDate = new Map();
+    const push = (date, item) => { if (!byDate.has(date)) byDate.set(date, []); byDate.get(date).push(item); };
+    visibleSessions.forEach(s => {
+      if (s.scheduled_date >= startWeek) push(s.scheduled_date, { type: 'class', s, st: studentById.get(s.student_id) });
+    });
+    visibleStudents.forEach(st => {
+      if (st.exam_date >= startWeek) push(st.exam_date, { type: 'exam', st });
+    });
+
+    const shownDates = [...byDate.keys()].sort();
+    const upcomingCount = visibleSessions.filter(s => s.scheduled_date >= todayStr && s.status === 'Pending').length;
+    const hasFutureClasses = visibleSessions.some(s => s.scheduled_date >= startWeek);
+
+    if (!hasFutureClasses) {
+      scheduleEmpty.style.display = 'flex';
+      scheduleWeeks.innerHTML = '';
+      scheduleSubtext.textContent = data.students.length
+        ? 'No classes from this week onward. Tick "Show past weeks" to see earlier classes.'
+        : 'Add a student and their classes will appear here automatically.';
+      return;
+    }
+    scheduleEmpty.style.display = 'none';
+
+    const lastShown = shownDates[shownDates.length - 1];
+    scheduleSubtext.textContent = `${upcomingCount} upcoming class${upcomingCount === 1 ? '' : 'es'}` +
+      (filterId ? ` for ${visibleStudents[0]?.name || 'this student'}` : ` for ${visibleStudents.length} student${visibleStudents.length === 1 ? '' : 's'}`) +
+      ` · until ${formatDisplayDate(lastShown)}`;
+
+    const thisWeek = mondayOf(todayStr);
+    let html = '';
+    let emptyWeeks = 0;
+    for (let week = startWeek; week <= lastShown; week = offsetDays(week, 7)) {
+      // Weeks with nothing in them (e.g. between the last class and the exam) collapse into one line
+      const hasAnything = [0, 1, 2, 3, 4, 5, 6].some(i => byDate.has(offsetDays(week, i)));
+      if (!hasAnything) { emptyWeeks++; continue; }
+      if (!html) emptyWeeks = 0;
+      if (emptyWeeks && html) { // only between weeks, never as the first row
+        html +=`<div class="sched-gap">No classes for ${emptyWeeks} week${emptyWeeks === 1 ? '' : 's'}</div>`;
+        emptyWeeks = 0;
+      }
+
+      const days = [0, 1, 2, 3, 4].map(i => offsetDays(week, i));
+      // Saturday/Sunday columns only appear when an extra weekend class (or exam) falls on them
+      [5, 6].forEach(i => { const d = offsetDays(week, i); if (byDate.has(d)) days.push(d); });
+
+      const weekClassCount = days.reduce((n, d) => n + (byDate.get(d) || []).filter(x => x.type === 'class' && x.s.status !== 'Missed').length, 0);
+      const weekLabel = week === thisWeek ? 'This week' : week === offsetDays(thisWeek, 7) ? 'Next week' : `Week of ${formatDisplayDate(week)}`;
+
+      html += `<section class="sched-week${week < thisWeek ? ' is-past-week' : ''}">
+        <header class="sched-week-head"><h3>${weekLabel}</h3><span>${weekClassCount} class${weekClassCount === 1 ? '' : 'es'}</span></header>
+        <div class="sched-days" style="--days:${days.length}">`;
+
+      days.forEach(d => {
+        const items = (byDate.get(d) || []).slice().sort((a, b) => {
+          if (a.type !== b.type) return a.type === 'exam' ? 1 : -1;
+          const ta = a.type === 'class' ? a.st.class_time : '';
+          const tb = b.type === 'class' ? b.st.class_time : '';
+          return ta.localeCompare(tb) || (a.st.name || '').localeCompare(b.st.name || '');
+        });
+        const { weekday, date } = shortDay(d);
+        const cls = ['sched-day'];
+        if (d === todayStr) cls.push('is-today');
+        if (d < todayStr) cls.push('is-past');
+        if (!items.length) cls.push('is-empty');
+        if (isWeekendStr(d)) cls.push('is-weekend');
+
+        html += `<div class="${cls.join(' ')}">
+          <div class="sched-day-head"><span class="sd-weekday">${weekday}</span><span class="sd-date">${date}</span>${d === todayStr ? '<span class="sd-today">Today</span>' : ''}</div>
+          <div class="sched-day-items">`;
+
+        if (!items.length) html += '<span class="sched-none">No classes</span>';
+        items.forEach(it => {
+          if (it.type === 'exam') {
+            html += `<button type="button" class="sched-chip sc-exam" data-student-id="${it.st.id}" title="${escapeHtml(it.st.name)}'s exam">
+              <span class="chip-time">🎓 Exam</span><span class="chip-name">${escapeHtml(it.st.name)}</span></button>`;
+            return;
+          }
+          const s = it.s;
+          const isTodayOpen = s.status === 'Pending' && d === todayStr;
+          const stCls = s.status === 'Taken' ? 'sc-taken' : s.status === 'Missed' ? 'sc-missed' : isTodayOpen ? 'sc-today' : 'sc-pending';
+          const extra = [stCls];
+          if (s.is_weekend) extra.push('sc-weekend');
+          if (state.highlightStudentId && String(s.student_id) === String(state.highlightStudentId)) extra.push('is-new');
+          const isLast = lastClassId.get(s.student_id) === s.id;
+          const meta = s.status === 'Missed' ? 'Missed'
+            : `#${classNo.get(s.id)}/${it.st.max_sessions || 20}${s.is_weekend ? ' · extra' : ''}${isLast ? ' 🏁' : ''}`;
+          html += `<button type="button" class="sched-chip ${extra.join(' ')}" data-student-id="${s.student_id}"
+              title="${escapeHtml(it.st.name)} · ${escapeHtml(formatDisplayDate(d))} · ${escapeHtml(formatTimeDisplay(it.st.class_time))}${isLast ? ' · last class' : ''}">
+            <span class="chip-time">${escapeHtml(formatTimeDisplay(it.st.class_time))}</span>
+            <span class="chip-name">${escapeHtml(it.st.name)}</span>
+            <span class="chip-meta">${meta}</span>
+          </button>`;
+        });
+        html += '</div></div>';
+      });
+      html += '</div></section>';
+    }
+    scheduleWeeks.innerHTML = html;
+
+    scheduleWeeks.querySelectorAll('.sched-chip').forEach(chip => {
+      chip.addEventListener('click', () => switchView('profile', Number(chip.dataset.studentId)));
+    });
+
+    // Just-added student: briefly highlight their classes and scroll to the first one
+    if (state.highlightStudentId) {
+      state.highlightStudentId = null;
+      const first = scheduleWeeks.querySelector('.is-new');
+      if (first) setTimeout(() => first.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+      setTimeout(() => scheduleWeeks.querySelectorAll('.is-new').forEach(c => c.classList.remove('is-new')), 6000);
+    }
+  }
+
+  scheduleFilter.addEventListener('change', renderSchedule);
+  schedulePastToggle.addEventListener('change', renderSchedule);
 
   // ================= View 2: Students Directory =================
   async function loadStudents() {
@@ -741,8 +758,12 @@
             <strong>${formatDisplayDate(student.exam_date)}</strong>
           </div>
           <div class="card-meta-row">
+            <span>Next Class:</span>
+            <span>${student.next_pending_date ? formatDisplayDate(student.next_pending_date) : '—'}</span>
+          </div>
+          <div class="card-meta-row">
             <span>Expected End:</span>
-            <span>${student.expected_end_date ? formatDisplayDate(student.expected_end_date) : '--'}</span>
+            <span>${student.expected_end_date ? formatDisplayDate(student.expected_end_date) : '—'}</span>
           </div>
         </div>
       `;
@@ -770,6 +791,16 @@
 
   // ================= View 3: Student Profile & Calendar =================
   async function loadStudentProfile(studentId) {
+    // Avoid showing the previous student's details while the new one loads
+    if (!state.currentStudentData || String(state.currentStudentData.student.id) !== String(studentId)) {
+      state.currentStudentData = null;
+      state.calendarMonth = null;          // new student -> pick a sensible month again
+      state.calendarSelectedDate = null;
+      calendarGrid.innerHTML = '';
+      calendarDayDetail.style.display = 'none';
+      profileName.textContent = 'Loading…';
+      profileAvatar.textContent = '…';
+    }
     profileSessionsLoading.style.display = 'flex';
     sessionsTimeline.innerHTML = '';
 
@@ -777,16 +808,16 @@
       const data = await apiRequest(`/api/students/${studentId}`);
       profileSessionsLoading.style.display = 'none';
 
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to fetch student details');
-      }
-
       state.currentStudentData = data;
       renderProfile(data);
 
     } catch (err) {
       profileSessionsLoading.style.display = 'none';
       showToast(`Error: ${err.message}`, 'error');
+      if (err.status === 404) {
+        // Student was deleted (e.g. in another tab) — go back to the list
+        switchView('students');
+      }
     }
   }
 
@@ -802,16 +833,16 @@
     profileStart.textContent = 'Starts: ' + formatDisplayDate(student.start_date);
     profileExam.textContent = 'Exam: ' + formatDisplayDate(student.exam_date);
 
-    if (metrics.days_until_exam !== null) {
-      if (metrics.days_until_exam < 0) {
-        profileDaysToExam.textContent = 'Exam Passed';
-      } else if (metrics.days_until_exam === 0) {
-        profileDaysToExam.textContent = 'Exam Today!';
-      } else {
-        profileDaysToExam.textContent = `${metrics.days_until_exam} days to exam`;
-      }
-    } else {
+    // Computed from the teacher's local date (the server runs in UTC)
+    const daysToExam = daysFromToday(student.exam_date);
+    if (daysToExam === null) {
       profileDaysToExam.textContent = '';
+    } else if (daysToExam < 0) {
+      profileDaysToExam.textContent = 'Exam Passed';
+    } else if (daysToExam === 0) {
+      profileDaysToExam.textContent = 'Exam Today!';
+    } else {
+      profileDaysToExam.textContent = `${daysToExam} day${daysToExam === 1 ? '' : 's'} to exam`;
     }
 
     // Metrics Cards
@@ -821,7 +852,7 @@
     metricEndDate.textContent = metrics.expected_end_date ? formatDisplayDate(metrics.expected_end_date) : 'N/A';
 
     // Progress bar
-    const totalMax = 20;
+    const totalMax = student.max_sessions || 20;
     const completedPct = Math.min(100, Math.round((metrics.completed_count / totalMax) * 100));
     const missedPct = Math.min(100 - completedPct, Math.round((metrics.missed_count / totalMax) * 100));
 
@@ -831,51 +862,251 @@
     barMissed.style.width = `${missedPct}%`;
 
     // Schedule Timeline
-    sessionCountBadge.textContent = sessions.length;
+    // Missed rows are history, not one of the 20 classes, so they are not numbered.
+    const classCount = sessions.filter(s => s.status !== 'Missed').length;
+    sessionCountBadge.textContent = `${classCount}/${totalMax}`;
     sessionsTimeline.innerHTML = '';
 
-    sessions.forEach((s, idx) => {
+    const todayStr = getTodayLocalDateStr();
+    let classNumber = 0;
+
+    sessions.forEach((s) => {
       const row = document.createElement('div');
-      row.className = 'session-row';
 
       const isPending = s.status === 'Pending';
       const isTaken = s.status === 'Taken';
       const isMissed = s.status === 'Missed';
       const statusClass = isPending ? 'status-pending' : (isTaken ? 'status-taken' : 'status-missed');
       const isWeekend = !!s.is_weekend;
+      const isToday = s.scheduled_date === todayStr;
+      const numberLabel = isMissed ? '—' : `#${++classNumber}`;
+
+      row.className = 'session-row' + (isToday ? ' is-today' : '') + (isMissed ? ' is-missed' : '');
 
       row.innerHTML = `
         <div class="session-left">
-          <div class="session-number-badge">#${idx + 1}</div>
+          <div class="session-number-badge" title="${isMissed ? 'Missed (not counted)' : 'Class number'}">${numberLabel}</div>
           <div class="session-date-info">
             <span class="session-date-main">${formatDisplayDate(s.scheduled_date)}</span>
-            <span class="session-date-day">${formatDayName(s.scheduled_date)}</span>
+            <span class="session-date-day">${formatDayName(s.scheduled_date)}${isToday ? ' · Today' : ''}</span>
           </div>
           ${isWeekend ? '<span class="tag-weekend">Weekend Class</span>' : ''}
         </div>
 
         <div class="session-right">
-          <span class="card-status-badge ${statusClass}">${s.status}</span>
-          ${isPending ? `
-            <button class="session-action-btn btn-mini-taken" data-action="take" title="Mark Taken">✓</button>
-            <button class="session-action-btn btn-mini-missed" data-action="miss" title="Mark Missed">✕</button>
-          ` : ''}
+          <span class="card-status-badge ${isPending && s.scheduled_date < todayStr ? 'status-unmarked' : statusClass}">${isPending ? (s.scheduled_date < todayStr ? 'Not marked' : 'Upcoming') : isTaken ? 'Completed' : 'Missed'}</span>
         </div>
       `;
 
-      const btnTake = row.querySelector('[data-action="take"]');
-      if (btnTake) {
-        btnTake.addEventListener('click', () => updateSessionStatus(s.id, 'Taken'));
-      }
-
-      const btnMiss = row.querySelector('[data-action="miss"]');
-      if (btnMiss) {
-        btnMiss.addEventListener('click', () => updateSessionStatus(s.id, 'Missed'));
-      }
+      // Clicking the date in the list jumps to that day in the calendar
+      const dateInfo = row.querySelector('.session-date-info');
+      dateInfo.title = 'Show in calendar';
+      dateInfo.addEventListener('click', () => {
+        selectCalendarDate(s.scheduled_date);
+        document.querySelector('.calendar-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
 
       sessionsTimeline.appendChild(row);
     });
+
+    renderCalendar();
   }
+
+  // ================= Profile Calendar =================
+  const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+
+  function addMonths(ym, n) {
+    const [y, m] = ym.split('-').map(Number);
+    const d = new Date(Date.UTC(y, m - 1 + n, 1));
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  }
+
+  /**
+   * Builds a lookup of date -> { session, number } for the current student.
+   * Numbering matches the session list: Missed sessions are not numbered.
+   */
+  function buildCalendarIndex(sessions) {
+    const byDate = new Map();
+    let n = 0;
+    sessions.forEach(s => {
+      const number = s.status === 'Missed' ? null : ++n;
+      const existing = byDate.get(s.scheduled_date);
+      // If a date ever has two rows, prefer the active (non-Missed) one
+      if (!existing || existing.session.status === 'Missed') {
+        byDate.set(s.scheduled_date, { session: s, number });
+      }
+    });
+    return byDate;
+  }
+
+  // Months the calendar can navigate between: course start .. exam (or last session if later)
+  function calendarRange(student, sessions) {
+    const dates = sessions.map(s => s.scheduled_date);
+    const first = [student.start_date, ...dates].sort()[0];
+    const last = [student.exam_date, ...dates].sort().slice(-1)[0];
+    return { min: first.slice(0, 7), max: last.slice(0, 7) };
+  }
+
+  function pickDefaultMonth(student, sessions) {
+    const { min, max } = calendarRange(student, sessions);
+    const thisMonth = getTodayLocalDateStr().slice(0, 7);
+    if (thisMonth >= min && thisMonth <= max) return thisMonth;
+    const nextPending = sessions.find(s => s.status === 'Pending');
+    return (nextPending ? nextPending.scheduled_date : student.start_date).slice(0, 7);
+  }
+
+  function renderCalendar() {
+    const data = state.currentStudentData;
+    if (!data) return;
+    const student = data.student;
+    const sessions = data.sessions || [];
+    const index = buildCalendarIndex(sessions);
+    const { min, max } = calendarRange(student, sessions);
+
+    if (!state.calendarMonth) state.calendarMonth = pickDefaultMonth(student, sessions);
+    const ym = state.calendarMonth;
+    const [year, month] = ym.split('-').map(Number);
+
+    calTitle.textContent = `${MONTH_NAMES[month - 1]} ${year}`;
+    calPrev.disabled = ym <= min;
+    calNext.disabled = ym >= max;
+    calToday.style.display = ym === getTodayLocalDateStr().slice(0, 7) ? 'none' : '';
+
+    const todayStr = getTodayLocalDateStr();
+    const firstDay = new Date(Date.UTC(year, month - 1, 1));
+    const leadingBlanks = (firstDay.getUTCDay() + 6) % 7; // Monday-first week
+    const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const totalCells = Math.ceil((leadingBlanks + daysInMonth) / 7) * 7;
+
+    let html = '';
+    for (let cell = 0; cell < totalCells; cell++) {
+      const dayNum = cell - leadingBlanks + 1;
+      if (dayNum < 1 || dayNum > daysInMonth) {
+        html += '<div class="cal-day cal-empty" aria-hidden="true"></div>';
+        continue;
+      }
+
+      const dateStr = `${ym}-${String(dayNum).padStart(2, '0')}`;
+      const entry = index.get(dateStr);
+      const isExam = dateStr === student.exam_date;
+      const isWeekendCol = cell % 7 >= 5;
+      const classes = ['cal-day'];
+      let mark = '';
+      let label = '';
+      let aria = formatDisplayDate(dateStr);
+
+      if (entry) {
+        const st = entry.session.status;
+        const unmarked = st === 'Pending' && dateStr < todayStr; // past class nobody marked yet
+        classes.push(st === 'Taken' ? 'cal-taken' : st === 'Missed' ? 'cal-missed' : unmarked ? 'cal-unmarked' : 'cal-pending');
+        if (entry.session.is_weekend) classes.push('cal-weekend');
+        mark = st === 'Taken' ? '✓' : st === 'Missed' ? '✕' : unmarked ? '?' : '•';
+        label = st === 'Missed' ? 'Missed' : `#${entry.number}`;
+        aria += `: ${st === 'Missed' ? 'missed class' : `class ${entry.number}, ${st === 'Taken' ? 'completed' : unmarked ? 'not marked' : 'upcoming'}`}`;
+      } else if (isExam) {
+        classes.push('cal-exam');
+        mark = '🎓';
+        label = 'Exam';
+        aria += ': exam day';
+      } else if (isWeekendCol) {
+        classes.push('cal-off');
+      }
+      if (dateStr === todayStr) { classes.push('is-today'); aria += ' (today)'; }
+      if (dateStr === state.calendarSelectedDate) classes.push('is-selected');
+
+      const clickable = entry || isExam;
+      html += clickable
+        ? `<button type="button" class="${classes.join(' ')}" data-date="${dateStr}" aria-label="${escapeHtml(aria)}">`
+          + `<span class="cal-num">${dayNum}</span><span class="cal-mark">${mark}</span><span class="cal-label">${label}</span></button>`
+        : `<div class="${classes.join(' ')}"><span class="cal-num">${dayNum}</span></div>`;
+    }
+    calendarGrid.innerHTML = html;
+
+    calendarGrid.querySelectorAll('button[data-date]').forEach(btn => {
+      btn.addEventListener('click', () => selectCalendarDate(btn.dataset.date));
+    });
+
+    renderCalendarDetail(index);
+  }
+
+  function selectCalendarDate(dateStr) {
+    state.calendarSelectedDate = dateStr;
+    state.calendarMonth = dateStr.slice(0, 7);
+    renderCalendar();
+  }
+
+  function renderCalendarDetail(index) {
+    const dateStr = state.calendarSelectedDate;
+    const student = state.currentStudentData.student;
+    const entry = dateStr ? index.get(dateStr) : null;
+
+    if (!dateStr || (!entry && dateStr !== student.exam_date)) {
+      calendarDayDetail.style.display = 'none';
+      return;
+    }
+
+    if (!entry) {
+      calendarDayDetail.innerHTML = `
+        <div class="detail-main">
+          <strong>${formatDisplayDate(dateStr)}</strong>
+          <span class="card-status-badge cal-exam-badge">🎓 Exam day</span>
+        </div>
+        <p class="detail-note">No classes are scheduled on or after the exam date.</p>`;
+      calendarDayDetail.style.display = 'block';
+      return;
+    }
+
+    const s = entry.session;
+    const statusClass = s.status === 'Pending' ? 'status-pending' : s.status === 'Taken' ? 'status-taken' : 'status-missed';
+    const isPast = dateStr < getTodayLocalDateStr();
+    const unmarked = s.status === 'Pending' && isPast;
+    const notes = {
+      Pending: unmarked
+        ? 'This class has not been marked yet.'
+        : 'Upcoming class. Tick it on the Today page on the day of the class.',
+      Taken: 'This class is completed.',
+      Missed: 'This class was missed. A makeup class was added at the end of the schedule if one fit before the exam.'
+    };
+    const statusText = { Pending: unmarked ? 'Not marked' : 'Upcoming', Taken: 'Completed', Missed: 'Missed' };
+    // Marking/correcting happens only in the Today page; offer a shortcut for today and past days.
+    const canOpenDay = !s.is_weekend && dateStr <= getTodayLocalDateStr();
+
+    calendarDayDetail.innerHTML = `
+      <div class="detail-main">
+        <strong>${formatDisplayDate(dateStr)}</strong>
+        <span class="detail-class-no">${entry.number ? `Class #${entry.number} of ${student.max_sessions || 20}` : 'Not counted'}</span>
+        <span class="card-status-badge ${unmarked ? 'status-unmarked' : statusClass}">${statusText[s.status] || s.status}</span>
+        ${s.is_weekend ? '<span class="tag-weekend">Weekend Class</span>' : ''}
+      </div>
+      <p class="detail-note">${notes[s.status] || ''}</p>
+      ${canOpenDay ? `<button type="button" class="btn btn-secondary detail-open-day" data-open-day="${dateStr}">
+        📋 Open this day on the Today page${s.status === 'Pending' ? ' to tick it' : ' to change it'}
+      </button>` : ''}`;
+    calendarDayDetail.style.display = 'block';
+
+    const openBtn = calendarDayDetail.querySelector('[data-open-day]');
+    if (openBtn) {
+      openBtn.addEventListener('click', () => {
+        state.selectedDate = dateStr;
+        state.attendancePreselectStudentId = student.id;
+        switchView('dashboard');
+      });
+    }
+  }
+
+  calPrev.addEventListener('click', () => {
+    state.calendarMonth = addMonths(state.calendarMonth, -1);
+    renderCalendar();
+  });
+  calNext.addEventListener('click', () => {
+    state.calendarMonth = addMonths(state.calendarMonth, 1);
+    renderCalendar();
+  });
+  calToday.addEventListener('click', () => {
+    state.calendarMonth = getTodayLocalDateStr().slice(0, 7);
+    renderCalendar();
+  });
 
   // Delete student handler
   btnDeleteStudent.addEventListener('click', async () => {
@@ -904,10 +1135,61 @@
     document.getElementById('inputStartDate').value = today;
     document.getElementById('inputExamDate').value = offsetDays(today, 35);
     document.getElementById('inputFinishedCount').value = 0;
+    updateSchedulePreview();
 
     modalAddStudent.style.display = 'flex';
     document.getElementById('inputStudentName').focus();
   }
+
+  // Live preview: how many weekday classes fit between start date and exam (max 20)
+  function updateSchedulePreview() {
+    const preview = document.getElementById('schedulePreview');
+    const start = document.getElementById('inputStartDate').value;
+    const exam = document.getElementById('inputExamDate').value;
+    if (!start || !exam) {
+      preview.style.display = 'none';
+      return;
+    }
+    if (start >= exam) {
+      preview.className = 'alert-box alert-error';
+      preview.textContent = 'Start date must be before the exam date.';
+      preview.style.display = 'block';
+      return;
+    }
+    const todayStr = getTodayLocalDateStr();
+    const finished = Math.max(0, parseInt(document.getElementById('inputFinishedCount').value, 10) || 0);
+    let count = 0;
+    let last = null;
+    let pastDays = 0;
+    for (let d = start; d < exam && count < 20; d = offsetDays(d, 1)) {
+      if (!isWeekendStr(d)) {
+        count++;
+        last = d;
+        if (d < todayStr) pastDays++;
+      }
+    }
+    // Past class days not covered by "Classes Already Finished" were never ticked -> counted as missed
+    const missedFromPast = Math.max(0, pastDays - finished);
+    const pastNote = missedFromPast > 0
+      ? ` Note: the start date is in the past. ${missedFromPast} class day(s) before today are not covered by "Classes Already Finished", so they will count as missed and makeup classes will be added.`
+      : '';
+
+    if (count === 0) {
+      preview.className = 'alert-box alert-error';
+      preview.textContent = 'No weekdays fit before the exam date.';
+    } else if (count < 20) {
+      preview.className = 'alert-box alert-warning';
+      preview.textContent = `Only ${count} of 20 classes (Mon–Fri) fit before the exam, last class ${formatDisplayDate(last)}.` + pastNote;
+    } else {
+      preview.className = missedFromPast ? 'alert-box alert-warning' : 'alert-box alert-info';
+      preview.textContent = `20 classes (Mon–Fri) will be scheduled, from ${formatDisplayDate(start)} to ${formatDisplayDate(last)}.` + pastNote;
+    }
+    preview.style.display = 'block';
+  }
+
+  document.getElementById('inputStartDate').addEventListener('change', updateSchedulePreview);
+  document.getElementById('inputExamDate').addEventListener('change', updateSchedulePreview);
+  document.getElementById('inputFinishedCount').addEventListener('input', updateSchedulePreview);
 
   function closeAddStudentModal() {
     modalAddStudent.style.display = 'none';
@@ -969,11 +1251,10 @@
       closeAddStudentModal();
       showToast(data.message || `Student ${name} enrolled with initial schedule.`, 'success');
 
-      if (data.student_id) {
-        switchView('profile', data.student_id);
-      } else {
-        switchView('students');
-      }
+      // Show the new student's classes straight away on the Schedule, highlighted
+      state.highlightStudentId = data.student_id || null;
+      scheduleFilter.value = '';
+      switchView('schedule');
 
     } catch (err) {
       submitBtn.disabled = false;
@@ -994,13 +1275,14 @@
     weekendStudentId.value = student.id;
     weekendStudentLabel.textContent = `For ${student.name} (Exam on ${formatDisplayDate(student.exam_date)})`;
 
-    // Suggest upcoming Saturday
-    const now = new Date();
-    const day = now.getDay();
-    const daysUntilSat = (6 - day + 7) % 7 || 7;
-    const upcomingSat = offsetDays(getTodayLocalDateStr(), daysUntilSat);
-    inputWeekendDate.value = upcomingSat;
-    inputWeekendDate.max = offsetDays(student.exam_date, -1);
+    // Suggest today if it's a weekend, otherwise the coming Saturday
+    const todayStr = getTodayLocalDateStr();
+    const suggested = isWeekendStr(todayStr)
+      ? todayStr
+      : offsetDays(todayStr, 6 - parseLocalDate(todayStr).getUTCDay());
+    const lastAllowed = offsetDays(student.exam_date, -1);
+    inputWeekendDate.max = lastAllowed;
+    inputWeekendDate.value = suggested <= lastAllowed ? suggested : '';
 
     modalWeekend.style.display = 'flex';
   }
@@ -1070,6 +1352,8 @@
   // ================= Event Listeners: Navigation =================
   tabDashboard.addEventListener('click', () => switchView('dashboard'));
   tabStudents.addEventListener('click', () => switchView('students'));
+  tabSchedule.addEventListener('click', () => switchView('schedule'));
+  mobTabSchedule.addEventListener('click', () => switchView('schedule'));
   mobTabDashboard.addEventListener('click', () => switchView('dashboard'));
   mobTabStudents.addEventListener('click', () => switchView('students'));
   btnBackToDirectory.addEventListener('click', () => switchView('students'));
@@ -1116,6 +1400,7 @@
   });
 
   // Initial Load
+  checkConnection();
   switchView('dashboard');
 
 })();

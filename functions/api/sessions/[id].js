@@ -1,10 +1,29 @@
-import { json, error, parseDate, formatDate, getNextWeekday } from '../_utils.js';
+import { json, error } from '../_utils.js';
+import { scheduleMakeup, validateClientToday } from '../_schedule.js';
+
+const STATUSES = ['Pending', 'Taken', 'Missed'];
 
 /**
- * PATCH /api/sessions/[id]
- * Handles:
- * - Scenario D: Marking a session as 'Taken'
- * - Scenario B: Marking a session as 'Missed' with calendar rescheduling & Exam Cutoff rule
+ * PATCH /api/sessions/[id]   body: { "status": "Taken" | "Missed" | "Pending" }
+ *
+ * Normal daily marking:
+ * - Scenario D: Pending -> Taken. No dates shift.
+ * - Scenario B: Pending -> Missed. A makeup Pending session is appended on the next
+ *   free weekday after the student's latest Pending session, but ONLY if that date
+ *   is strictly before the exam date (otherwise the session is lost).
+ *
+ * Corrections (teacher fixes a past day):
+ * - Taken  -> Pending : undo. No dates shift.
+ * - Taken  -> Missed  : same as Scenario B (makeup appended if it fits).
+ * - Missed -> Taken / Pending : the class is given back, so the makeup is taken away:
+ *   if the student now has more than max_sessions active (non-Missed) classes,
+ *   their last Pending session is deleted (same as Scenario C's "delete last pending").
+ *
+ * Optional body field "today" (teacher's local YYYY-MM-DD): makeups are always placed after it.
+ *
+ * Every update is conditional on the status we just read, so a double-click or two
+ * open tabs can never apply the same change twice.
+ * Weekend classes (Scenario C) are not changed through this endpoint.
  */
 export async function onRequestPatch(context) {
   try {
@@ -23,123 +42,109 @@ export async function onRequestPatch(context) {
       return error('Invalid JSON body.', 400);
     }
 
-    const { status } = body;
-    if (status !== 'Taken' && status !== 'Missed') {
-      return error('Status must be either "Taken" or "Missed".', 400);
+    const { status } = body || {};
+    if (!STATUSES.includes(status)) {
+      return error('Status must be "Taken", "Missed" or "Pending".', 400);
     }
 
-    // Fetch existing session and associated student details
-    const sessionRecord = await db.prepare(`
-      SELECT 
-        s.id,
-        s.student_id,
-        s.scheduled_date,
-        s.status,
-        s.is_weekend,
-        st.name AS student_name,
-        st.exam_date
+    const record = await db.prepare(`
+      SELECT s.id, s.student_id, s.scheduled_date, s.status, s.is_weekend,
+             st.name AS student_name, st.exam_date, st.max_sessions
       FROM sessions s
       JOIN students st ON s.student_id = st.id
       WHERE s.id = ?
     `).bind(sessionId).first();
 
-    if (!sessionRecord) {
-      return error('Session not found.', 404);
+    if (!record) {
+      return error('Session not found. It may have been removed — please refresh.', 404);
+    }
+    if (record.is_weekend) {
+      return error('Weekend classes cannot be changed here.', 400);
+    }
+    if (record.status === status) {
+      return error(`This class is already marked as ${status}.`, 409);
     }
 
-    const studentId = sessionRecord.student_id;
-    const previousStatus = sessionRecord.status;
+    const previous = record.status;
+    const studentId = record.student_id;
+    const maxSessions = record.max_sessions || 20;
+    const who = record.student_name;
+    const day = record.scheduled_date;
 
-    // --- Scenario D: Taken Weekday/Weekend Class ---
-    if (status === 'Taken') {
-      await db.prepare(`
-        UPDATE sessions 
-        SET status = 'Taken' 
-        WHERE id = ?
-      `).bind(sessionId).run();
+    // Conditional update: only succeeds if nobody changed the row since we read it.
+    const updateRes = await db.prepare(`
+      UPDATE sessions SET status = ? WHERE id = ? AND status = ?
+    `).bind(status, sessionId, previous).run();
 
+    if (!updateRes.meta || updateRes.meta.changes === 0) {
+      return error('This class was just updated by another request. Please refresh.', 409);
+    }
+
+    const base = { success: true, session_id: sessionId, status, previous_status: previous };
+
+    // ---------- Restoring a missed class (Missed -> Taken / Pending) ----------
+    if (previous === 'Missed') {
+      const activeRow = await db.prepare(`
+        SELECT COUNT(*) AS active FROM sessions WHERE student_id = ? AND status != 'Missed'
+      `).bind(studentId).first();
+
+      let removed = null;
+      if ((activeRow?.active || 0) > maxSessions) {
+        const lastPending = await db.prepare(`
+          SELECT id, scheduled_date FROM sessions
+          WHERE student_id = ? AND status = 'Pending' AND id != ?
+          ORDER BY scheduled_date DESC, id DESC
+          LIMIT 1
+        `).bind(studentId, sessionId).first();
+
+        if (!lastPending) {
+          // Nothing to take away -> undo our change and refuse.
+          await db.prepare(`UPDATE sessions SET status = 'Missed' WHERE id = ?`).bind(sessionId).run();
+          return error(`${who} already has ${maxSessions} classes, so this missed class can't be restored.`, 409);
+        }
+        await db.prepare(`DELETE FROM sessions WHERE id = ? AND status = 'Pending'`).bind(lastPending.id).run();
+        removed = lastPending;
+      }
+
+      const label = status === 'Taken' ? 'Completed' : 'not marked';
       return json({
-        success: true,
-        session_id: sessionId,
-        status: 'Taken',
-        message: `Class on ${sessionRecord.scheduled_date} marked as Taken.`
+        ...base,
+        removed_pending_session: removed,
+        message: `${who}: class on ${day} changed from Missed to ${label}.` +
+          (removed ? ` The extra class on ${removed.scheduled_date} was removed to keep the total at ${maxSessions}.` : '')
       });
     }
 
-    // --- Scenario B: Missed Weekday Class ---
+    // ---------- Pending/Taken -> Missed (Scenario B) ----------
     if (status === 'Missed') {
-      // 1. Update this session to 'Missed'
-      await db.prepare(`
-        UPDATE sessions 
-        SET status = 'Missed' 
-        WHERE id = ?
-      `).bind(sessionId).run();
-
-      // If it was already missed previously, do not reschedule an additional slot
-      if (previousStatus === 'Missed') {
+      const makeup = await scheduleMakeup(db, record, maxSessions, validateClientToday(body.today));
+      const prefix = previous === 'Taken' ? `class on ${day} changed from Completed to Missed.` : `class on ${day} marked as Missed.`;
+      if (makeup.inserted) {
         return json({
-          success: true,
-          session_id: sessionId,
-          status: 'Missed',
-          rescheduled: false,
-          message: `Session is already marked as Missed.`
-        });
-      }
-
-      // 2. Find the maximum scheduled_date for this student where status is 'Pending'
-      const maxPendingRow = await db.prepare(`
-        SELECT MAX(scheduled_date) as max_date 
-        FROM sessions 
-        WHERE student_id = ? AND status = 'Pending'
-      `).bind(studentId).first();
-
-      // Base date: the latest pending session, or if none remaining, the date of the session just missed
-      const baseDateStr = maxPendingRow?.max_date || sessionRecord.scheduled_date;
-      const baseDate = parseDate(baseDateStr);
-
-      if (!baseDate) {
-        return error('Unable to parse base date for rescheduling.', 500);
-      }
-
-      // 3. Calculate the next available weekday (Mon-Fri) after that max date
-      const nextWeekdayDate = getNextWeekday(baseDate);
-      const nextWeekdayStr = formatDate(nextWeekdayDate);
-
-      // 4. Exam Cutoff Rule:
-      // If this new date is strictly BEFORE the exam_date, INSERT a new Pending session row.
-      // (If it hits or exceeds the exam date limit, do not insert; the session is lost).
-      const examDateObj = parseDate(sessionRecord.exam_date);
-
-      if (examDateObj && nextWeekdayDate.getTime() < examDateObj.getTime()) {
-        const insertRes = await db.prepare(`
-          INSERT INTO sessions (student_id, scheduled_date, status, is_weekend)
-          VALUES (?, ?, 'Pending', 0)
-        `).bind(studentId, nextWeekdayStr).run();
-
-        const newSessionId = insertRes.meta?.last_row_id;
-
-        return json({
-          success: true,
-          session_id: sessionId,
-          status: 'Missed',
+          ...base,
           rescheduled: true,
-          new_session_id: newSessionId,
-          rescheduled_date: nextWeekdayStr,
-          message: `Class marked as Missed. Added new makeup class on ${nextWeekdayStr}.`
-        });
-      } else {
-        // Cutoff reached: session cannot be rescheduled
-        return json({
-          success: true,
-          session_id: sessionId,
-          status: 'Missed',
-          rescheduled: false,
-          exam_cutoff_reached: true,
-          message: `Class marked as Missed. Could not reschedule: next weekday (${nextWeekdayStr}) reaches or passes exam date (${sessionRecord.exam_date}). This session is lost.`
+          new_session_id: makeup.id,
+          rescheduled_date: makeup.date,
+          message: `${who}: ${prefix} Makeup class added on ${makeup.date}.`
         });
       }
+      return json({
+        ...base,
+        rescheduled: false,
+        exam_cutoff_reached: makeup.reason === 'exam',
+        message: makeup.reason === 'exam'
+          ? `${who}: ${prefix} No makeup possible — the next free weekday (${makeup.date}) is not before the exam (${record.exam_date}). This session is lost.`
+          : `${who}: ${prefix} No makeup needed — the schedule already has ${maxSessions} classes.`
+      });
     }
 
+    // ---------- Pending -> Taken (Scenario D) or Taken -> Pending (undo) ----------
+    return json({
+      ...base,
+      message: status === 'Taken'
+        ? `${who}: class on ${day} marked as Completed.`
+        : `${who}: class on ${day} changed back to not marked.`
+    });
   } catch (err) {
     return error(`Failed to update session: ${err.message}`, 500);
   }

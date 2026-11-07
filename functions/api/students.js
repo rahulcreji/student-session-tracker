@@ -42,9 +42,14 @@ export async function onRequestGet(context) {
   }
 }
 
+const TIME_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
+
 /**
  * POST /api/students
- * Implements Scenario A: Creating a Student & Initial Session Generation
+ * Scenario A: Create a student and generate their initial schedule.
+ *  - Up to max_sessions (20) weekday (Mon-Fri) sessions from start_date.
+ *  - First N (= classes_already_finished) are 'Taken', the rest 'Pending'.
+ *  - Exam Cutoff Rule: only dates strictly before exam_date are generated.
  */
 export async function onRequestPost(context) {
   try {
@@ -60,104 +65,93 @@ export async function onRequestPost(context) {
       return error('Invalid JSON body.', 400);
     }
 
-    const { name, start_date, class_time, exam_date } = body;
-    const classes_already_finished = Math.max(0, parseInt(body.classes_already_finished, 10) || 0);
+    const { name, start_date, class_time, exam_date } = body || {};
+    const maxSessions = 20;
 
-    // Validations
     if (!name || typeof name !== 'string' || !name.trim()) {
       return error('Student name is required.', 400);
     }
-    if (!class_time || typeof class_time !== 'string' || !class_time.trim()) {
-      return error('Class time is required.', 400);
+    if (name.trim().length > 100) {
+      return error('Student name must be 100 characters or fewer.', 400);
+    }
+    if (!class_time || typeof class_time !== 'string' || !TIME_RE.test(class_time.trim())) {
+      return error('Class time is required (HH:MM, 24-hour).', 400);
     }
 
     const startDateObj = parseDate(start_date);
     const examDateObj = parseDate(exam_date);
-
     if (!startDateObj) {
-      return error('Valid start_date (YYYY-MM-DD) is required.', 400);
+      return error('Valid start date (YYYY-MM-DD) is required.', 400);
     }
     if (!examDateObj) {
-      return error('Valid exam_date (YYYY-MM-DD) is required.', 400);
+      return error('Valid exam date (YYYY-MM-DD) is required.', 400);
     }
     if (startDateObj.getTime() >= examDateObj.getTime()) {
-      return error('Start date must be strictly before exam date.', 400);
+      return error('Start date must be before the exam date.', 400);
+    }
+
+    const finishedRaw = parseInt(body.classes_already_finished, 10);
+    const classesFinished = Math.min(maxSessions, Math.max(0, isNaN(finishedRaw) ? 0 : finishedRaw));
+
+    // Build the schedule first so we never create a student with zero sessions.
+    const schedule = [];
+    let curr = new Date(startDateObj.getTime());
+    while (schedule.length < maxSessions && curr.getTime() < examDateObj.getTime()) {
+      if (isWeekday(curr)) {
+        schedule.push({
+          date: formatDate(curr),
+          status: schedule.length < classesFinished ? 'Taken' : 'Pending'
+        });
+      }
+      curr = addDays(curr, 1);
+    }
+
+    if (schedule.length === 0) {
+      return error('There are no weekdays between the start date and the exam date. Please pick different dates.', 400);
     }
 
     const trimmedName = name.trim();
     const trimmedTime = class_time.trim();
-    const formattedStartDate = formatDate(startDateObj);
-    const formattedExamDate = formatDate(examDateObj);
-    const maxSessions = 20;
 
-    // Step 1: Insert student
     const studentInsertRes = await db.prepare(`
       INSERT INTO students (name, start_date, class_time, exam_date, max_sessions)
       VALUES (?, ?, ?, ?, ?)
-    `).bind(trimmedName, formattedStartDate, trimmedTime, formattedExamDate, maxSessions).run();
+    `).bind(trimmedName, formatDate(startDateObj), trimmedTime, formatDate(examDateObj), maxSessions).run();
 
     const studentId = studentInsertRes.meta?.last_row_id;
     if (!studentId) {
-      // Fallback query to fetch ID if last_row_id is not exposed
-      const lookup = await db.prepare(`
-        SELECT id FROM students 
-        WHERE name = ? AND start_date = ? AND class_time = ? 
-        ORDER BY id DESC LIMIT 1
-      `).bind(trimmedName, formattedStartDate, trimmedTime).first();
-      if (!lookup) {
-        return error('Failed to retrieve created student ID.', 500);
-      }
-    }
-    const finalStudentId = studentId || (await db.prepare(`
-      SELECT id FROM students WHERE name = ? ORDER BY id DESC LIMIT 1
-    `).bind(trimmedName).first())?.id;
-
-    // Step 2 & 3: Generate sessions for weekdays (Mon-Fri)
-    // First N rows are 'Taken', rest are 'Pending'
-    // Exam Cutoff Rule: loop MUST stop if it reaches the day of the exam (strictly before exam_date)
-    const sessionsToInsert = [];
-    let curr = new Date(startDateObj.getTime());
-
-    while (sessionsToInsert.length < maxSessions) {
-      // Cutoff: Stop if candidate date is on or after the exam date
-      if (curr.getTime() >= examDateObj.getTime()) {
-        break;
-      }
-
-      if (isWeekday(curr)) {
-        const isTaken = sessionsToInsert.length < classes_already_finished;
-        sessionsToInsert.push({
-          dateStr: formatDate(curr),
-          status: isTaken ? 'Taken' : 'Pending',
-          is_weekend: 0
-        });
-      }
-
-      curr = addDays(curr, 1);
+      return error('Failed to retrieve the new student ID from the database.', 500);
     }
 
-    // Step 4: Batch insert all sessions
-    if (sessionsToInsert.length > 0) {
-      const batchStmts = sessionsToInsert.map(s => 
-        db.prepare(`
-          INSERT INTO sessions (student_id, scheduled_date, status, is_weekend)
-          VALUES (?, ?, ?, ?)
-        `).bind(finalStudentId, s.dateStr, s.status, s.is_weekend)
-      );
+    try {
+      const insertSession = db.prepare(`
+        INSERT INTO sessions (student_id, scheduled_date, status, is_weekend)
+        VALUES (?, ?, ?, 0)
+      `);
+      await db.batch(schedule.map(s => insertSession.bind(studentId, s.date, s.status)));
+    } catch (batchErr) {
+      // Roll back the student row so we don't leave an orphan without a schedule.
+      await db.prepare(`DELETE FROM students WHERE id = ?`).bind(studentId).run().catch(() => {});
+      throw batchErr;
+    }
 
-      await db.batch(batchStmts);
+    const notes = [];
+    if (schedule.length < maxSessions) {
+      notes.push(`only ${schedule.length} weekday(s) fit before the exam`);
+    }
+    if (classesFinished > schedule.length) {
+      notes.push(`only ${schedule.length} could be marked as already finished`);
     }
 
     return json({
       success: true,
-      student_id: finalStudentId,
-      message: `Student created with ${sessionsToInsert.length} session(s) scheduled.`,
-      sessions_created: sessionsToInsert.length,
-      capped_by_exam: sessionsToInsert.length < maxSessions
+      student_id: studentId,
+      sessions_created: schedule.length,
+      capped_by_exam: schedule.length < maxSessions,
+      message: `${trimmedName} enrolled with ${schedule.length} session(s).` +
+        (notes.length ? ` Note: ${notes.join('; ')}.` : '')
     }, 201);
-
   } catch (err) {
     return error(`Failed to create student: ${err.message}`, 500);
   }
 }
-

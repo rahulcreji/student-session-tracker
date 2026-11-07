@@ -31,7 +31,12 @@ export async function onRequestGet(context) {
         (SELECT COUNT(*) FROM sessions WHERE student_id = st.id AND status = 'Taken') AS completed_count,
         (SELECT COUNT(*) FROM sessions WHERE student_id = st.id AND status = 'Missed') AS missed_count,
         (SELECT COUNT(*) FROM sessions WHERE student_id = st.id AND status = 'Pending') AS pending_count,
-        (SELECT COUNT(*) FROM sessions WHERE student_id = st.id) AS total_sessions
+        (SELECT COUNT(*) FROM sessions WHERE student_id = st.id) AS total_sessions,
+        -- Position of this class among the student's active (non-Missed) classes: "class 9 of 20"
+        (SELECT COUNT(*) FROM sessions x
+          WHERE x.student_id = s.student_id AND x.status != 'Missed'
+            AND (x.scheduled_date < s.scheduled_date OR (x.scheduled_date = s.scheduled_date AND x.id <= s.id))
+        ) AS class_number
       FROM sessions s
       JOIN students st ON s.student_id = st.id
       WHERE s.scheduled_date = ?

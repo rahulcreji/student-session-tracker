@@ -1,10 +1,17 @@
 import { json, error, parseDate, formatDate, isWeekend } from '../_utils.js';
 
 /**
- * POST /api/sessions/weekend
- * Handles Scenario C: Adding a Weekend Class
- * 1. INSERT a new row for the weekend date with status='Taken' and is_weekend=1
- * 2. Capped at 20: DELETE the student's very last scheduled Pending session (Max scheduled_date where status='Pending')
+ * POST /api/sessions/weekend   body: { "student_id": 1, "date": "YYYY-MM-DD" }
+ *
+ * Scenario C: Teacher adds a weekend class.
+ * 1. INSERT the weekend date with status 'Taken' and is_weekend = 1.
+ * 2. DELETE the student's very last Pending session (MAX scheduled_date) so the
+ *    total stays capped at max_sessions (20).
+ * Both statements run in a single D1 batch (atomic).
+ *
+ * Edge case: if the student has no Pending sessions left, the weekend class is
+ * only allowed when it makes up for sessions lost to the exam cutoff
+ * (i.e. Taken < max_sessions). Otherwise the course is already complete.
  */
 export async function onRequestPost(context) {
   try {
@@ -18,95 +25,83 @@ export async function onRequestPost(context) {
       return error('Invalid JSON body.', 400);
     }
 
-    const { student_id, date } = body;
-    const studentId = parseInt(student_id, 10);
-
+    const studentId = parseInt(body?.student_id, 10);
     if (!studentId || isNaN(studentId)) {
       return error('Valid student_id is required.', 400);
     }
 
-    const parsedDate = parseDate(date);
+    const parsedDate = parseDate(body?.date);
     if (!parsedDate) {
       return error('Valid date (YYYY-MM-DD) is required.', 400);
     }
-
-    // Must be a Saturday or Sunday
     if (!isWeekend(parsedDate)) {
-      return error('Selected date is not a weekend (must be a Saturday or Sunday).', 400);
+      return error('Selected date is not a weekend. Please pick a Saturday or Sunday.', 400);
     }
-
     const formattedDate = formatDate(parsedDate);
 
-    // Verify student exists
     const student = await db.prepare(`
-      SELECT id, name, exam_date, max_sessions 
-      FROM students 
-      WHERE id = ?
+      SELECT id, name, exam_date, max_sessions FROM students WHERE id = ?
     `).bind(studentId).first();
-
     if (!student) {
       return error('Student not found.', 404);
     }
 
-    // Cutoff check: Cannot schedule a weekend class on or after exam date
     const examDateObj = parseDate(student.exam_date);
     if (examDateObj && parsedDate.getTime() >= examDateObj.getTime()) {
-      return error(`Cannot schedule a class on or after the exam date (${student.exam_date}).`, 400);
+      return error(`Weekend class must be before the exam date (${student.exam_date}).`, 400);
     }
 
-    // Check if a session already exists on this date
     const existing = await db.prepare(`
-      SELECT id, status FROM sessions 
-      WHERE student_id = ? AND scheduled_date = ?
+      SELECT id, status FROM sessions WHERE student_id = ? AND scheduled_date = ?
     `).bind(studentId, formattedDate).first();
-
     if (existing) {
-      return error(`A session already exists on ${formattedDate} (Status: ${existing.status}).`, 400);
+      return error(`${student.name} already has a class on ${formattedDate} (${existing.status}).`, 409);
     }
 
-    // Step 1: Insert weekend class with status 'Taken' and is_weekend = 1
-    const insertRes = await db.prepare(`
-      INSERT INTO sessions (student_id, scheduled_date, status, is_weekend)
-      VALUES (?, ?, 'Taken', 1)
-    `).bind(studentId, formattedDate).run();
-
-    const weekendSessionId = insertRes.meta?.last_row_id;
-
-    // Step 2: Find the student's very last scheduled 'Pending' session in the database
     const lastPending = await db.prepare(`
-      SELECT id, scheduled_date 
-      FROM sessions 
-      WHERE student_id = ? AND status = 'Pending' 
-      ORDER BY scheduled_date DESC, id DESC 
+      SELECT id, scheduled_date FROM sessions
+      WHERE student_id = ? AND status = 'Pending'
+      ORDER BY scheduled_date DESC, id DESC
       LIMIT 1
     `).bind(studentId).first();
 
-    let removedPendingInfo = null;
+    const insertStmt = db.prepare(`
+      INSERT INTO sessions (student_id, scheduled_date, status, is_weekend)
+      VALUES (?, ?, 'Taken', 1)
+    `).bind(studentId, formattedDate);
 
     if (lastPending) {
-      await db.prepare(`DELETE FROM sessions WHERE id = ?`).bind(lastPending.id).run();
-      removedPendingInfo = {
-        id: lastPending.id,
-        scheduled_date: lastPending.scheduled_date
-      };
+      const [insertRes] = await db.batch([
+        insertStmt,
+        db.prepare(`DELETE FROM sessions WHERE id = ? AND status = 'Pending'`).bind(lastPending.id)
+      ]);
+
+      return json({
+        success: true,
+        message: `Weekend class on ${formattedDate} added as Taken. The last pending class (${lastPending.scheduled_date}) was removed to keep the total at ${student.max_sessions || 20}.`,
+        weekend_session: { id: insertRes.meta?.last_row_id ?? null, date: formattedDate, status: 'Taken', is_weekend: 1 },
+        removed_pending_session: { id: lastPending.id, scheduled_date: lastPending.scheduled_date }
+      }, 201);
     }
 
+    // No Pending sessions left to swap out.
+    const takenRow = await db.prepare(`
+      SELECT COUNT(*) AS taken FROM sessions WHERE student_id = ? AND status = 'Taken'
+    `).bind(studentId).first();
+    const maxSessions = student.max_sessions || 20;
+
+    if ((takenRow?.taken || 0) >= maxSessions) {
+      return error(`${student.name} has already completed all ${maxSessions} sessions.`, 409);
+    }
+
+    const insertRes = await insertStmt.run();
     return json({
       success: true,
-      message: removedPendingInfo
-        ? `Added weekend class on ${formattedDate}. Removed last scheduled pending class on ${removedPendingInfo.scheduled_date} to keep total capped.`
-        : `Added weekend class on ${formattedDate}. (No pending sessions were available to remove).`,
-      weekend_session: {
-        id: weekendSessionId,
-        date: formattedDate,
-        status: 'Taken',
-        is_weekend: 1
-      },
-      removed_pending_session: removedPendingInfo
+      message: `Weekend class on ${formattedDate} added as Taken (makeup for a lost session — no pending classes needed removing).`,
+      weekend_session: { id: insertRes.meta?.last_row_id ?? null, date: formattedDate, status: 'Taken', is_weekend: 1 },
+      removed_pending_session: null
     }, 201);
-
   } catch (err) {
     return error(`Failed to add weekend session: ${err.message}`, 500);
   }
 }
-
