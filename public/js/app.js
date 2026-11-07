@@ -824,3 +824,4 @@
   switchView('dashboard');
 
 })();
+

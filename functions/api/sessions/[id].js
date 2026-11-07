@@ -144,3 +144,4 @@ export async function onRequestPatch(context) {
     return error(`Failed to update session: ${err.message}`, 500);
   }
 }
+

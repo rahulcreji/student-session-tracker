@@ -92,3 +92,4 @@ export function getNextWeekday(fromDate) {
   }
   return curr;
 }
+

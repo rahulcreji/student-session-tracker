@@ -98,3 +98,4 @@ export async function onRequestDelete(context) {
     return error(`Failed to delete student: ${err.message}`, 500);
   }
 }
+

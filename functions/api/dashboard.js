@@ -58,3 +58,4 @@ export async function onRequestGet(context) {
     return error(`Failed to load dashboard: ${err.message}`, 500);
   }
 }
+

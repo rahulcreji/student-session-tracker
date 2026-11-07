@@ -109,3 +109,4 @@ export async function onRequestPost(context) {
     return error(`Failed to add weekend session: ${err.message}`, 500);
   }
 }
+

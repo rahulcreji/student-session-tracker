@@ -23,3 +23,4 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_student_id ON sessions(student_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(scheduled_date);
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+

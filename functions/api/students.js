@@ -160,3 +160,4 @@ export async function onRequestPost(context) {
     return error(`Failed to create student: ${err.message}`, 500);
   }
 }
+

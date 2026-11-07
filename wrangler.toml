@@ -6,3 +6,4 @@ pages_build_output_dir = "public"
 binding = "DB"
 database_name = "student_sessions_db"
 database_id = "a06c70c4-02e6-4da2-a5a1-7127260b3f88"
+

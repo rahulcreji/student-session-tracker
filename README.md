@@ -150,3 +150,4 @@ Your site is now live with full serverless functionality!
 ├── schema.sql                   # SQL schema reference
 └── wrangler.toml                # Cloudflare configuration
 ```
+
