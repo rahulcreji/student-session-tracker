@@ -1,6 +1,7 @@
 /**
  * Student Session Tracker - Client Application
  * Compatible with Desktop (Windows) & Mobile browsers
+ * Connects to Cloudflare Pages Functions (/api/...) with automatic local offline demo support
  */
 
 (function () {
@@ -12,7 +13,8 @@
     selectedDate: getTodayLocalDateStr(),
     currentStudentId: null,
     currentStudentData: null,
-    studentsList: []
+    studentsList: [],
+    isOfflineMode: false
   };
 
   // ================= DOM Elements =================
@@ -74,6 +76,7 @@
   // Profile
   const btnBackToDirectory = document.getElementById('btnBackToDirectory');
   const btnDeleteStudent = document.getElementById('btnDeleteStudent');
+  const btnExportCsv = document.getElementById('btnExportCsv');
   const profileAvatar = document.getElementById('profileAvatar');
   const profileName = document.getElementById('profileName');
   const profileTime = document.getElementById('profileTime');
@@ -105,21 +108,22 @@
 
   function parseLocalDate(dateStr) {
     if (!dateStr) return null;
-    const [y, m, d] = dateStr.split('-').map(Number);
-    return new Date(y, m - 1, d);
+    const parts = dateStr.split('-');
+    if (parts.length !== 3) return null;
+    return new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])));
   }
 
   function formatDisplayDate(dateStr) {
     const d = parseLocalDate(dateStr);
     if (!d) return dateStr;
-    const options = { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' };
+    const options = { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' };
     return d.toLocaleDateString(undefined, options);
   }
 
   function formatDayName(dateStr) {
     const d = parseLocalDate(dateStr);
     if (!d) return '';
-    return d.toLocaleDateString(undefined, { weekday: 'long' });
+    return d.toLocaleDateString(undefined, { timeZone: 'UTC', weekday: 'long' });
   }
 
   function formatTimeDisplay(timeStr) {
@@ -137,17 +141,31 @@
 
   function offsetDays(dateStr, numDays) {
     const d = parseLocalDate(dateStr);
-    d.setDate(d.getDate() + numDays);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
+    d.setUTCDate(d.getUTCDate() + numDays);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
   }
 
   function isWeekendStr(dateStr) {
     const d = parseLocalDate(dateStr);
-    const day = d.getDay();
+    const day = d.getUTCDay();
     return day === 0 || day === 6;
+  }
+
+  function isWeekdayStr(dateStr) {
+    const d = parseLocalDate(dateStr);
+    const day = d.getUTCDay();
+    return day >= 1 && day <= 5;
+  }
+
+  function getNextWeekdayStr(dateStr) {
+    let curr = offsetDays(dateStr, 1);
+    while (!isWeekdayStr(curr)) {
+      curr = offsetDays(curr, 1);
+    }
+    return curr;
   }
 
   // ================= Toast Notifications =================
@@ -177,6 +195,304 @@
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  // ================= Local Mock Fallback Store (for offline / file:// preview) =================
+  const MOCK_STORAGE_KEY = 'student_session_tracker_mock_db';
+
+  function getMockStore() {
+    try {
+      const data = localStorage.getItem(MOCK_STORAGE_KEY);
+      if (data) return JSON.parse(data);
+    } catch { }
+
+    // Seed with a starter student for initial preview
+    const today = getTodayLocalDateStr();
+    const mockData = {
+      students: [
+        {
+          id: 1,
+          name: "Rahul S.",
+          start_date: today,
+          class_time: "10:00",
+          exam_date: offsetDays(today, 32),
+          max_sessions: 20
+        }
+      ],
+      sessions: []
+    };
+
+    // Generate 20 weekday sessions for initial student
+    let curr = today;
+    let sId = 1;
+    while (mockData.sessions.length < 20) {
+      if (curr >= mockData.students[0].exam_date) break;
+      if (isWeekdayStr(curr)) {
+        mockData.sessions.push({
+          id: sId++,
+          student_id: 1,
+          scheduled_date: curr,
+          status: mockData.sessions.length < 3 ? 'Taken' : 'Pending',
+          is_weekend: 0
+        });
+      }
+      curr = offsetDays(curr, 1);
+    }
+
+    saveMockStore(mockData);
+    return mockData;
+  }
+
+  function saveMockStore(data) {
+    try {
+      localStorage.setItem(MOCK_STORAGE_KEY, JSON.stringify(data));
+    } catch { }
+  }
+
+  async function mockApiCall(url, options = {}) {
+    const method = (options.method || 'GET').toUpperCase();
+    const store = getMockStore();
+    const urlObj = new URL(url, 'http://localhost');
+    const path = urlObj.pathname;
+
+    // GET /api/dashboard
+    if (path === '/api/dashboard' && method === 'GET') {
+      const date = urlObj.searchParams.get('date') || getTodayLocalDateStr();
+      const sessions = store.sessions
+        .filter(s => s.scheduled_date === date)
+        .map(s => {
+          const student = store.students.find(st => st.id === s.student_id) || {};
+          const allStudentSessions = store.sessions.filter(ses => ses.student_id === s.student_id);
+          return {
+            session_id: s.id,
+            student_id: s.student_id,
+            scheduled_date: s.scheduled_date,
+            status: s.status,
+            is_weekend: s.is_weekend,
+            student_name: student.name || 'Unknown',
+            class_time: student.class_time || '10:00',
+            start_date: student.start_date,
+            exam_date: student.exam_date,
+            completed_count: allStudentSessions.filter(x => x.status === 'Taken').length,
+            missed_count: allStudentSessions.filter(x => x.status === 'Missed').length,
+            pending_count: allStudentSessions.filter(x => x.status === 'Pending').length,
+            total_sessions: allStudentSessions.length
+          };
+        });
+
+      return {
+        success: true,
+        date,
+        summary: {
+          total: sessions.length,
+          pending: sessions.filter(x => x.status === 'Pending').length,
+          taken: sessions.filter(x => x.status === 'Taken').length,
+          missed: sessions.filter(x => x.status === 'Missed').length
+        },
+        sessions
+      };
+    }
+
+    // GET /api/students
+    if (path === '/api/students' && method === 'GET') {
+      const students = store.students.map(st => {
+        const studentSessions = store.sessions.filter(ses => ses.student_id === st.id);
+        const dates = studentSessions.map(x => x.scheduled_date).sort();
+        const pendingSessions = studentSessions.filter(x => x.status === 'Pending').sort((a,b) => a.scheduled_date.localeCompare(b.scheduled_date));
+        return {
+          id: st.id,
+          name: st.name,
+          start_date: st.start_date,
+          class_time: st.class_time,
+          exam_date: st.exam_date,
+          max_sessions: st.max_sessions,
+          completed_count: studentSessions.filter(x => x.status === 'Taken').length,
+          missed_count: studentSessions.filter(x => x.status === 'Missed').length,
+          pending_count: studentSessions.filter(x => x.status === 'Pending').length,
+          total_sessions: studentSessions.length,
+          expected_end_date: dates.length > 0 ? dates[dates.length - 1] : null,
+          next_pending_date: pendingSessions.length > 0 ? pendingSessions[0].scheduled_date : null
+        };
+      });
+      return { success: true, students };
+    }
+
+    // POST /api/students
+    if (path === '/api/students' && method === 'POST') {
+      const body = JSON.parse(options.body || '{}');
+      const newId = store.students.length ? Math.max(...store.students.map(s => s.id)) + 1 : 1;
+      const newStudent = {
+        id: newId,
+        name: body.name.trim(),
+        start_date: body.start_date,
+        class_time: body.class_time,
+        exam_date: body.exam_date,
+        max_sessions: 20
+      };
+      store.students.push(newStudent);
+
+      let currDate = body.start_date;
+      const finished = Number(body.classes_already_finished) || 0;
+      let nextSessId = store.sessions.length ? Math.max(...store.sessions.map(s => s.id)) + 1 : 1;
+      let count = 0;
+
+      while (count < 20) {
+        if (currDate >= body.exam_date) break;
+        if (isWeekdayStr(currDate)) {
+          store.sessions.push({
+            id: nextSessId++,
+            student_id: newId,
+            scheduled_date: currDate,
+            status: count < finished ? 'Taken' : 'Pending',
+            is_weekend: 0
+          });
+          count++;
+        }
+        currDate = offsetDays(currDate, 1);
+      }
+
+      saveMockStore(store);
+      return { success: true, student_id: newId, message: `Student created with ${count} sessions scheduled.` };
+    }
+
+    // GET /api/students/:id
+    const studentMatch = path.match(/^\/api\/students\/(\d+)$/);
+    if (studentMatch && method === 'GET') {
+      const id = parseInt(studentMatch[1], 10);
+      const student = store.students.find(s => s.id === id);
+      if (!student) return { success: false, error: 'Student not found' };
+
+      const sessions = store.sessions.filter(s => s.student_id === id).sort((a,b) => a.scheduled_date.localeCompare(b.scheduled_date));
+      const dates = sessions.map(s => s.scheduled_date);
+      const pendingDates = sessions.filter(s => s.status === 'Pending').map(s => s.scheduled_date);
+
+      return {
+        success: true,
+        student,
+        metrics: {
+          total_sessions: sessions.length,
+          max_sessions: student.max_sessions,
+          completed_count: sessions.filter(s => s.status === 'Taken').length,
+          missed_count: sessions.filter(s => s.status === 'Missed').length,
+          pending_count: sessions.filter(s => s.status === 'Pending').length,
+          expected_end_date: dates.length > 0 ? dates[dates.length - 1] : null,
+          next_pending_date: pendingDates.length > 0 ? pendingDates[0] : null,
+          days_until_exam: Math.round((parseLocalDate(student.exam_date) - parseLocalDate(getTodayLocalDateStr())) / (1000 * 60 * 60 * 24))
+        },
+        sessions
+      };
+    }
+
+    // DELETE /api/students/:id
+    if (studentMatch && method === 'DELETE') {
+      const id = parseInt(studentMatch[1], 10);
+      store.students = store.students.filter(s => s.id !== id);
+      store.sessions = store.sessions.filter(s => s.student_id !== id);
+      saveMockStore(store);
+      return { success: true, message: 'Student deleted' };
+    }
+
+    // PATCH /api/sessions/:id
+    const sessionMatch = path.match(/^\/api\/sessions\/(\d+)$/);
+    if (sessionMatch && method === 'PATCH') {
+      const id = parseInt(sessionMatch[1], 10);
+      const session = store.sessions.find(s => s.id === id);
+      if (!session) return { success: false, error: 'Session not found' };
+
+      const body = JSON.parse(options.body || '{}');
+      const student = store.students.find(s => s.id === session.student_id);
+
+      if (body.status === 'Taken') {
+        session.status = 'Taken';
+        saveMockStore(store);
+        return { success: true, message: `Class marked as Taken.` };
+      }
+
+      if (body.status === 'Missed') {
+        session.status = 'Missed';
+        // Find max pending scheduled_date
+        const pendingSessions = store.sessions.filter(s => s.student_id === session.student_id && s.status === 'Pending');
+        const baseDate = pendingSessions.length > 0
+          ? pendingSessions.map(s => s.scheduled_date).sort().reverse()[0]
+          : session.scheduled_date;
+
+        const nextWeekday = getNextWeekdayStr(baseDate);
+
+        if (nextWeekday < student.exam_date) {
+          const newId = store.sessions.length ? Math.max(...store.sessions.map(s => s.id)) + 1 : 1;
+          store.sessions.push({
+            id: newId,
+            student_id: session.student_id,
+            scheduled_date: nextWeekday,
+            status: 'Pending',
+            is_weekend: 0
+          });
+          saveMockStore(store);
+          return { success: true, status: 'Missed', rescheduled: true, message: `Marked as Missed. Added makeup class on ${nextWeekday}.` };
+        } else {
+          saveMockStore(store);
+          return { success: true, status: 'Missed', rescheduled: false, message: `Marked as Missed. Cannot reschedule: reached exam cutoff (${student.exam_date}). Session lost.` };
+        }
+      }
+    }
+
+    // POST /api/sessions/weekend
+    if (path === '/api/sessions/weekend' && method === 'POST') {
+      const body = JSON.parse(options.body || '{}');
+      const studentId = parseInt(body.student_id, 10);
+      const date = body.date;
+      const student = store.students.find(s => s.id === studentId);
+      if (!student) return { success: false, error: 'Student not found' };
+
+      // Add weekend class
+      const newId = store.sessions.length ? Math.max(...store.sessions.map(s => s.id)) + 1 : 1;
+      store.sessions.push({
+        id: newId,
+        student_id: studentId,
+        scheduled_date: date,
+        status: 'Taken',
+        is_weekend: 1
+      });
+
+      // Remove last scheduled pending class to cap at 20
+      const pending = store.sessions.filter(s => s.student_id === studentId && s.status === 'Pending');
+      let removedInfo = null;
+      if (pending.length > 0) {
+        pending.sort((a,b) => b.scheduled_date.localeCompare(a.scheduled_date));
+        const toRemove = pending[0];
+        store.sessions = store.sessions.filter(s => s.id !== toRemove.id);
+        removedInfo = { id: toRemove.id, scheduled_date: toRemove.scheduled_date };
+      }
+
+      saveMockStore(store);
+      return {
+        success: true,
+        message: removedInfo
+          ? `Added weekend class on ${date}. Removed last pending class on ${removedInfo.scheduled_date} to keep total capped at 20.`
+          : `Added weekend class on ${date}.`
+      };
+    }
+
+    return { success: false, error: 'Endpoint not matched' };
+  }
+
+  // Unified API client that automatically switches to Mock Store when running locally or on file://
+  async function apiRequest(url, options = {}) {
+    if (window.location.protocol === 'file:') {
+      return await mockApiCall(url, options);
+    }
+
+    try {
+      const res = await fetch(url, options);
+      if (res.status === 404 || res.status === 502 || res.status === 503) {
+        // Fallback to local mock if server functions are not deployed locally
+        return await mockApiCall(url, options);
+      }
+      return await res.json();
+    } catch {
+      // Network failure (offline or local without server) -> fallback to mock
+      return await mockApiCall(url, options);
+    }
   }
 
   // ================= Routing & View Switching =================
@@ -230,9 +546,7 @@
     }
 
     try {
-      const res = await fetch(`/api/dashboard?date=${encodeURIComponent(state.selectedDate)}`);
-      const data = await res.json();
-
+      const data = await apiRequest(`/api/dashboard?date=${encodeURIComponent(state.selectedDate)}`);
       dashboardLoading.style.display = 'none';
 
       if (!data.success) {
@@ -320,12 +634,10 @@
         </div>
       `;
 
-      // Student name click -> opens student profile
       card.querySelector('.card-student-name').addEventListener('click', () => {
         switchView('profile', session.student_id);
       });
 
-      // Actions
       const btnTake = card.querySelector('[data-action="take"]');
       if (btnTake) {
         btnTake.addEventListener('click', () => updateSessionStatus(session.session_id, 'Taken'));
@@ -347,13 +659,11 @@
 
   async function updateSessionStatus(sessionId, status) {
     try {
-      const res = await fetch(`/api/sessions/${sessionId}`, {
+      const data = await apiRequest(`/api/sessions/${sessionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status })
       });
-
-      const data = await res.json();
 
       if (!data.success) {
         throw new Error(data.error || 'Failed to update session');
@@ -361,7 +671,6 @@
 
       showToast(data.message || `Session marked as ${status}`, 'success');
 
-      // Refresh whatever view is currently visible
       if (state.currentView === 'dashboard') {
         loadDashboard();
       } else if (state.currentView === 'profile' && state.currentStudentId) {
@@ -380,9 +689,7 @@
     studentsGrid.innerHTML = '';
 
     try {
-      const res = await fetch('/api/students');
-      const data = await res.json();
-
+      const data = await apiRequest('/api/students');
       studentsLoading.style.display = 'none';
 
       if (!data.success) {
@@ -415,7 +722,6 @@
       const completed = student.completed_count || 0;
       const missed = student.missed_count || 0;
       const pending = student.pending_count || 0;
-      const total = student.total_sessions || 20;
       const formattedTime = formatTimeDisplay(student.class_time);
 
       card.innerHTML = `
@@ -469,9 +775,7 @@
     sessionsTimeline.innerHTML = '';
 
     try {
-      const res = await fetch(`/api/students/${studentId}`);
-      const data = await res.json();
-
+      const data = await apiRequest(`/api/students/${studentId}`);
       profileSessionsLoading.style.display = 'none';
 
       if (!data.success) {
@@ -539,7 +843,6 @@
       const isTaken = s.status === 'Taken';
       const isMissed = s.status === 'Missed';
       const statusClass = isPending ? 'status-pending' : (isTaken ? 'status-taken' : 'status-missed');
-
       const isWeekend = !!s.is_weekend;
 
       row.innerHTML = `
@@ -583,8 +886,7 @@
     if (!confirmDelete) return;
 
     try {
-      const res = await fetch(`/api/students/${state.currentStudentId}`, { method: 'DELETE' });
-      const data = await res.json();
+      const data = await apiRequest(`/api/students/${state.currentStudentId}`, { method: 'DELETE' });
       if (!data.success) throw new Error(data.error || 'Failed to delete student');
 
       showToast(`Student ${name} deleted successfully.`, 'info');
@@ -594,16 +896,52 @@
     }
   });
 
+  // Export to CSV handler
+  btnExportCsv?.addEventListener('click', () => {
+    if (!state.currentStudentData) return;
+    exportStudentCSV(state.currentStudentData);
+  });
+
+  function exportStudentCSV(data) {
+    const student = data.student;
+    const sessions = data.sessions || [];
+
+    let csv = `Student Session Report\n`;
+    csv += `Student Name,"${student.name}"\n`;
+    csv += `Class Time,"${student.class_time}"\n`;
+    csv += `Course Start Date,${student.start_date}\n`;
+    csv += `Exam Date,${student.exam_date}\n`;
+    csv += `Total Sessions Scheduled,${sessions.length}\n`;
+    csv += `Completed (Taken),${data.metrics.completed_count}\n`;
+    csv += `Missed,${data.metrics.missed_count}\n`;
+    csv += `Remaining (Pending),${data.metrics.pending_count}\n\n`;
+    csv += `Session #,Scheduled Date,Day,Status,Weekend Class\n`;
+
+    sessions.forEach((s, idx) => {
+      const day = formatDayName(s.scheduled_date);
+      const isWk = s.is_weekend ? 'Yes' : 'No';
+      csv += `${idx + 1},${s.scheduled_date},"${day}",${s.status},${isWk}\n`;
+    });
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${student.name.replace(/\s+/g, '_')}_schedule.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast('Attendance report exported to CSV', 'success');
+  }
+
   // ================= Add Student Modal =================
   function openAddStudentModal() {
     formAddError.style.display = 'none';
     formAddStudent.reset();
 
-    // Default start date = today or next weekday
     const today = getTodayLocalDateStr();
     document.getElementById('inputStartDate').value = today;
-
-    // Default exam date = 5 weeks from today
     document.getElementById('inputExamDate').value = offsetDays(today, 35);
     document.getElementById('inputFinishedCount').value = 0;
 
@@ -649,7 +987,7 @@
       submitBtn.disabled = true;
       spinner.style.display = 'inline-block';
 
-      const res = await fetch('/api/students', {
+      const data = await apiRequest('/api/students', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -661,7 +999,6 @@
         })
       });
 
-      const data = await res.json();
       submitBtn.disabled = false;
       spinner.style.display = 'none';
 
@@ -672,7 +1009,6 @@
       closeAddStudentModal();
       showToast(data.message || `Student ${name} enrolled with initial schedule.`, 'success');
 
-      // Navigate to new student profile
       if (data.student_id) {
         switchView('profile', data.student_id);
       } else {
@@ -743,7 +1079,7 @@
       submitBtn.disabled = true;
       spinner.style.display = 'inline-block';
 
-      const res = await fetch('/api/sessions/weekend', {
+      const data = await apiRequest('/api/sessions/weekend', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -752,7 +1088,6 @@
         })
       });
 
-      const data = await res.json();
       submitBtn.disabled = false;
       spinner.style.display = 'none';
 
@@ -824,4 +1159,3 @@
   switchView('dashboard');
 
 })();
-
