@@ -76,7 +76,6 @@
   // Profile
   const btnBackToDirectory = document.getElementById('btnBackToDirectory');
   const btnDeleteStudent = document.getElementById('btnDeleteStudent');
-  const btnExportCsv = document.getElementById('btnExportCsv');
   const profileAvatar = document.getElementById('profileAvatar');
   const profileName = document.getElementById('profileName');
   const profileTime = document.getElementById('profileTime');
@@ -895,45 +894,6 @@
       showToast(`Delete failed: ${err.message}`, 'error');
     }
   });
-
-  // Export to CSV handler
-  btnExportCsv?.addEventListener('click', () => {
-    if (!state.currentStudentData) return;
-    exportStudentCSV(state.currentStudentData);
-  });
-
-  function exportStudentCSV(data) {
-    const student = data.student;
-    const sessions = data.sessions || [];
-
-    let csv = `Student Session Report\n`;
-    csv += `Student Name,"${student.name}"\n`;
-    csv += `Class Time,"${student.class_time}"\n`;
-    csv += `Course Start Date,${student.start_date}\n`;
-    csv += `Exam Date,${student.exam_date}\n`;
-    csv += `Total Sessions Scheduled,${sessions.length}\n`;
-    csv += `Completed (Taken),${data.metrics.completed_count}\n`;
-    csv += `Missed,${data.metrics.missed_count}\n`;
-    csv += `Remaining (Pending),${data.metrics.pending_count}\n\n`;
-    csv += `Session #,Scheduled Date,Day,Status,Weekend Class\n`;
-
-    sessions.forEach((s, idx) => {
-      const day = formatDayName(s.scheduled_date);
-      const isWk = s.is_weekend ? 'Yes' : 'No';
-      csv += `${idx + 1},${s.scheduled_date},"${day}",${s.status},${isWk}\n`;
-    });
-
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${student.name.replace(/\s+/g, '_')}_schedule.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    showToast('Attendance report exported to CSV', 'success');
-  }
 
   // ================= Add Student Modal =================
   function openAddStudentModal() {
