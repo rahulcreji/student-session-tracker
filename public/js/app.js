@@ -84,7 +84,6 @@
   const scheduleWeeks = document.getElementById('scheduleWeeks');
   const scheduleSubtext = document.getElementById('scheduleSubtext');
   const dayTotal = document.getElementById('dayTotal');
-  const dayPending = document.getElementById('dayPending');
   const dayTaken = document.getElementById('dayTaken');
   const dayMissed = document.getElementById('dayMissed');
 
@@ -361,7 +360,6 @@
       dashboardLoading.style.display = 'none';
 
       dayTotal.textContent = data.summary?.total || 0;
-      dayPending.textContent = data.summary?.pending || 0;
       dayTaken.textContent = data.summary?.taken || 0;
       dayMissed.textContent = data.summary?.missed || 0;
 
