@@ -313,10 +313,10 @@
     }
   }
 
-  // ================= Close past days =================
-  // "If the teacher didn't tick a student, the class was not taken."
-  // Classes from earlier days that are still unticked become Missed on the server
-  // (and get a makeup class). Runs once per day per open tab, before data is shown.
+  // ================= Default attendance =================
+  // Monday–Friday classes are attended by default: weekday classes still Pending on
+  // today or earlier days are marked attended on the server; the teacher unticks absentees.
+  // Runs once per day per open tab, before data is shown.
   let closeDaysPromise = null;
   function ensurePastDaysClosed() {
     const today = getTodayLocalDateStr();
@@ -330,7 +330,7 @@
     })
       .then(data => {
         state.closedThrough = today;
-        if (data.closed > 0) showToast(data.message, 'info');
+        if (data.from_earlier_days > 0) showToast(data.message, 'info');
       })
       .catch(err => showToast(`Could not update earlier days: ${err.message}`, 'error'))
       .finally(() => { closeDaysPromise = null; });
@@ -438,7 +438,7 @@
    *
    * Monday–Friday: lists the students who have a class that day.
    *   Untick (today or a past day) = Missed straight away, makeup added at the end.
-   *   Never ticked = becomes Missed automatically once the day is over.
+   *   Default = ticked (attended); classes are marked attended when their day starts.
    *   Ticking a Missed class gives the class back (its makeup is removed).
    *
    * Saturday/Sunday: lists every student still in their course (`candidates`) plus
@@ -455,15 +455,15 @@
     const attended = sessions.filter(s => s.status === 'Taken').length;
     const total = sessions.length + candidates.length;
 
-    checklistCount.textContent = `${attended} of ${total} ${weekendDay ? 'came' : 'attended'}`;
+    checklistCount.textContent = `${attended} of ${total} ${weekendDay ? 'came' : 'present'} today`;
     if (isFuture) {
       checklistHint.textContent = 'This day is in the future. Students can be ticked on the day of their class.';
     } else if (weekendDay) {
       checklistHint.textContent = `${formatDayName(day)} is an extra day. Tick the students who came: each tick counts as one class, and their last class is removed from the end of the schedule. Students not ticked are not affected.`;
     } else if (isPast) {
-      checklistHint.textContent = 'Past day: tick students who attended. Unticking a student marks them missed, and one class is added at the end of their schedule.';
+      checklistHint.textContent = 'Everyone is ticked as attended by default. Untick anyone who did not come: they are marked missed and one class is added at the end of their schedule.';
     } else {
-      checklistHint.textContent = 'Tick each student who attended. Unticking a student marks them missed (one class is added at the end of their schedule). Anyone not ticked by the end of today also counts as missed.';
+      checklistHint.textContent = 'Everyone is ticked as attended by default. Untick anyone who did not come: they are marked missed and one class is added at the end of their schedule.';
     }
 
     // One row per student: existing classes first, then weekend candidates
@@ -483,13 +483,14 @@
       if (s.candidate) {
         stateClass = isFuture ? 'ci-upcoming' : 'ci-open';
         statusText = 'Not ticked';
-        meta = `${s.completed_count} of ${s.max_sessions || 20} done · ${s.pending_count} left`;
+        meta = `${s.completed_count} of ${s.max_sessions || 20} attended · ${s.pending_count} left`;
       } else {
         stateClass = s.status === 'Taken' ? 'ci-taken' : s.status === 'Missed' ? 'ci-missed' : (isFuture ? 'ci-upcoming' : 'ci-open');
         statusText = s.status === 'Taken' ? (weekendDay ? 'Came' : 'Attended')
           : s.status === 'Missed' ? 'Missed'
           : isFuture ? 'Upcoming' : 'Not ticked yet';
-        meta = s.status === 'Missed' ? 'not counted' : `Class ${s.class_number} of ${s.max_sessions || 20}`;
+        // Show the student's TOTAL classes attended (earlier days included), not just today
+        meta = `${s.completed_count} of ${s.max_sessions || 20} attended · ${s.pending_count} left`;
         if (s.is_weekend) meta += ' · <span class="tag-weekend">Extra weekend class</span>';
       }
 
@@ -527,7 +528,7 @@
   }
 
   // Monday–Friday: tick = attended, untick = missed (today or any earlier day).
-  // Students never ticked become missed automatically once the day is over.
+  // Classes are ticked (attended) by default when their day starts.
   async function onChecklistToggle(s, box) {
     const target = box.checked ? 'Taken' : 'Missed';
     const done = await updateSessionStatus(s.session_id, target, {
@@ -1315,7 +1316,7 @@
       const first = dates[0];
       const last = dates[dates.length - 1];
       const pastNote = first < todayStr
-        ? ' The next class date is in the past: any of those days not ticked will count as missed.'
+        ? ' The next class date is in the past: those days count as attended. Untick on the Today page any day the student missed.'
         : '';
       if (dates.length < left) {
         show('warning', `${done} attended classes will be recorded. Only ${dates.length} of the remaining ${left} classes fit before the exam (${formatDisplayDate(first)} to ${formatDisplayDate(last)}).` + pastNote);
@@ -1338,7 +1339,7 @@
     }
     const pastDays = dates.filter(d => d < todayStr).length;
     const pastNote = pastDays
-      ? ` The first class date is in the past: ${pastDays} class day(s) before today will count as missed. If this student already attended classes, choose "Already started" instead.`
+      ? ` The first class date is in the past: ${pastDays} class day(s) before today will count as attended (untick any they missed on the Today page). If this student already attended classes, choose "Already started" instead.`
       : '';
     const last = dates[dates.length - 1];
     if (dates.length < 20) {

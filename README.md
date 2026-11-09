@@ -13,17 +13,18 @@ Live: https://student-session-tracker.the-language-formula.workers.dev
 | Scenario | Trigger | What happens |
 |---|---|---|
 | **A – Enroll student** | Add Student form | Up to 20 Mon–Fri classes from `start_date` at the student's class time. First *N* (`classes_already_finished`) are `Taken`, rest `Pending`. Only dates **strictly before** `exam_date` are generated. `exam_date` is **optional**: left empty it is stored as `''` and no exam cutoff applies anywhere (generation, makeups, weekend classes). **Already started:** the form sends `next_class_date` + *N* instead of `start_date`; the start date is set *N* weekdays before the next class, so the *N* finished classes are recorded just before it and the remaining 20 − *N* run Mon–Fri from the next class date. The new student's classes appear on the **Schedule** straight away (highlighted). |
-| **B – Missed** | Student not ticked | One makeup `Pending` class is added on the next free weekday after the latest Pending class (never on a day that has already passed) — **only if** that date is before the exam; otherwise the session is lost. |
+| **B – Missed** | Teacher unticks a weekday class | One makeup `Pending` class is added on the next free weekday after the latest Pending class (never on a day that has already passed) — **only if** that date is before the exam; otherwise the session is lost. |
 | **C – Weekend class** | Ticking a student on Saturday/Sunday on the Today page (or “Add Weekend Class” on the profile). Unticking removes it again (`DELETE /api/sessions/:id`) and gives the last class back | Sat/Sun row inserted as `Taken` (`is_weekend = 1`) and the student’s last `Pending` class is deleted (one atomic batch), so one class disappears from the end of the Schedule. |
 | **D – Taken** | Student ticked | Session → `Taken`. No dates move. |
 
 ### Daily workflow
 
-1. **Today** page → open the **“Tick the students who attended”** checklist and tick each student who came.
-   Unticking today simply means “not ticked yet”.
-2. When the day is over, any class still **not ticked counts as not taken (Missed)** and a makeup class is added at the end
-   (Scenario B). This happens automatically the next time the app is opened (`POST /api/sessions/close-days`,
-   using the teacher's local date).
+1. **Today** page → **Monday–Friday classes are ticked (attended) by default.** When the app opens, every weekday
+   class still `Pending` on today or an earlier day is marked `Taken` (`POST /api/sessions/close-days`, using the
+   teacher's local date).
+2. The teacher **unticks** students who did not come → `Missed` straight away and a makeup class is added at the end
+   (Scenario B). Ticking again gives the class back. On Saturday/Sunday everyone starts unticked; ticking adds an
+   extra class (Scenario C).
 3. **Schedule** page → every student's classes week by week (Mon–Fri; Sat/Sun columns only appear for extra classes),
    with date, time, class number (#/20), 🏁 last class and 🎓 exam, **from today onward only** (history is on each student's profile). Filter by student.
 
@@ -51,7 +52,7 @@ Future days can’t be ticked, and weekend classes aren’t changed from the che
 | GET / DELETE | `/api/students/:id` | Profile + all sessions / delete student and sessions |
 | PATCH | `/api/sessions/:id` | `{ "status": "Taken" \| "Missed" \| "Pending" }` (Scenarios D / B, and corrections) |
 | POST | `/api/sessions/weekend` | `{ "student_id", "date" }` (Scenario C) |
-| POST | `/api/sessions/close-days` | `{ "today" }` — unticked classes from earlier days become Missed (+ makeups) |
+| POST | `/api/sessions/close-days` | `{ "today" }` — weekday classes up to today that are still Pending become attended (default) |
 
 All responses are JSON: `{ "success": true, ... }` or `{ "success": false, "error": "..." }`.
 
@@ -106,7 +107,7 @@ npx wrangler dev                                                        # http:/
 │   ├── students/[id].js         # GET, DELETE /api/students/:id
 │   └── sessions/
 │       ├── [id].js              # PATCH /api/sessions/:id        (Scenarios B, D + corrections)
-│       ├── close-days.js        # POST /api/sessions/close-days  (unticked = missed)
+│       ├── close-days.js        # POST /api/sessions/close-days  (default: attended)
 │       └── weekend.js           # POST /api/sessions/weekend     (Scenario C)
 ├── public/                      # Static frontend (index.html, css/, js/)
 ├── schema.sql                   # D1 schema
