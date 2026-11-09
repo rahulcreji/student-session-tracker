@@ -437,9 +437,9 @@
    * Checklist dropdown. Tick = attended.
    *
    * Monday–Friday: lists the students who have a class that day.
-   *   Untick on TODAY = not ticked yet (becomes Missed when the day is over).
-   *   Untick on a PAST day = not attended (Missed, makeup added).
-   *   Ticking a past Missed class gives the class back (its makeup is removed).
+   *   Untick (today or a past day) = Missed straight away, makeup added at the end.
+   *   Never ticked = becomes Missed automatically once the day is over.
+   *   Ticking a Missed class gives the class back (its makeup is removed).
    *
    * Saturday/Sunday: lists every student still in their course (`candidates`) plus
    *   anyone already ticked that day. Tick = extra weekend class (their last class is
@@ -461,9 +461,9 @@
     } else if (weekendDay) {
       checklistHint.textContent = `${formatDayName(day)} is an extra day. Tick the students who came: each tick counts as one class, and their last class is removed from the end of the schedule. Students not ticked are not affected.`;
     } else if (isPast) {
-      checklistHint.textContent = 'Past day: tick students who attended. Anyone left unticked counted as missed, and a makeup class was added at the end of their schedule.';
+      checklistHint.textContent = 'Past day: tick students who attended. Unticking a student marks them missed, and one class is added at the end of their schedule.';
     } else {
-      checklistHint.textContent = 'Tick each student who attended. Anyone not ticked by the end of today counts as missed, and a makeup class is added at the end of their schedule.';
+      checklistHint.textContent = 'Tick each student who attended. Unticking a student marks them missed (one class is added at the end of their schedule). Anyone not ticked by the end of today also counts as missed.';
     }
 
     // One row per student: existing classes first, then weekend candidates
@@ -526,9 +526,10 @@
     }
   }
 
+  // Monday–Friday: tick = attended, untick = missed (today or any earlier day).
+  // Students never ticked become missed automatically once the day is over.
   async function onChecklistToggle(s, box) {
-    const isPast = state.selectedDate < getTodayLocalDateStr();
-    const target = box.checked ? 'Taken' : (isPast ? 'Missed' : 'Pending');
+    const target = box.checked ? 'Taken' : 'Missed';
     const done = await updateSessionStatus(s.session_id, target, {
       container: attendanceChecklist,
       studentName: s.student_name,
