@@ -150,3 +150,55 @@ export async function onRequestPatch(context) {
   }
 }
 
+
+/**
+ * DELETE /api/sessions/[id]?today=YYYY-MM-DD
+ * Untick an extra weekend class (the reverse of Scenario C):
+ * the weekend class is deleted and the class it replaced is given back as one
+ * Pending class at the end of the schedule (next free weekday, before the exam if any).
+ * Only weekend classes can be removed; weekday classes are ticked/unticked with PATCH.
+ */
+export async function onRequestDelete(context) {
+  try {
+    const db = context.env.DB;
+    if (!db) return error('Database binding (DB) is missing.', 500);
+
+    const sessionId = parseInt(context.params.id, 10);
+    if (!sessionId || isNaN(sessionId)) {
+      return error('Invalid session ID.', 400);
+    }
+    const today = validateClientToday(new URL(context.request.url).searchParams.get('today'));
+
+    const record = await db.prepare(`
+      SELECT s.id, s.student_id, s.scheduled_date, s.status, s.is_weekend,
+             st.name AS student_name, st.exam_date, st.max_sessions
+      FROM sessions s
+      JOIN students st ON s.student_id = st.id
+      WHERE s.id = ?
+    `).bind(sessionId).first();
+
+    if (!record) {
+      return error('This class was already removed. Please refresh.', 404);
+    }
+    if (!record.is_weekend) {
+      return error('Only extra weekend classes can be removed. Weekday classes are unticked instead.', 400);
+    }
+
+    const del = await db.prepare(`DELETE FROM sessions WHERE id = ? AND is_weekend = 1`).bind(sessionId).run();
+    if (!del.meta || del.meta.changes === 0) {
+      return error('This class was already removed. Please refresh.', 409);
+    }
+
+    const makeup = await scheduleMakeup(db, record, record.max_sessions || 20, today);
+    return json({
+      success: true,
+      removed_session_id: sessionId,
+      restored_date: makeup.inserted ? makeup.date : null,
+      message: makeup.inserted
+        ? `${record.student_name}: weekend class on ${record.scheduled_date} removed. Their class on ${makeup.date} is back on the schedule.`
+        : `${record.student_name}: weekend class on ${record.scheduled_date} removed.`
+    });
+  } catch (err) {
+    return error(`Failed to remove class: ${err.message}`, 500);
+  }
+}

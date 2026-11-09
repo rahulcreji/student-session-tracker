@@ -69,6 +69,9 @@
   const btnRefreshDashboard = document.getElementById('btnRefreshDashboard');
   const dashboardLoading = document.getElementById('dashboardLoading');
   const dashboardEmpty = document.getElementById('dashboardEmpty');
+  const dashboardEmptyTitle = document.getElementById('dashboardEmptyTitle');
+  const dashboardEmptyText = document.getElementById('dashboardEmptyText');
+  const dashboardNext = document.getElementById('dashboardNext');
   const attendanceChecklist = document.getElementById('attendanceChecklist');
   const checklistCount = document.getElementById('checklistCount');
   const checklistHint = document.getElementById('checklistHint');
@@ -76,7 +79,6 @@
 
   // Schedule view
   const scheduleFilter = document.getElementById('scheduleFilter');
-  const schedulePastToggle = document.getElementById('schedulePastToggle');
   const scheduleLoading = document.getElementById('scheduleLoading');
   const scheduleEmpty = document.getElementById('scheduleEmpty');
   const scheduleWeeks = document.getElementById('scheduleWeeks');
@@ -369,68 +371,144 @@
         todayPendingCount.style.display = count > 0 ? 'inline-block' : 'none';
       }
 
-      if (!data.sessions || data.sessions.length === 0) {
+      const sessions = data.sessions || [];
+      const candidates = data.weekend_candidates || []; // filled on Saturday/Sunday only
+      if (sessions.length === 0 && candidates.length === 0) {
         dashboardEmpty.style.display = 'flex';
+        showNextClassDay(requestedDate);
         return;
       }
 
-      renderChecklist(data.sessions);
+      renderChecklist(sessions, candidates);
     } catch (err) {
       dashboardLoading.style.display = 'none';
       showToast(`Error: ${err.message}`, 'error');
     }
   }
 
+  // On a day without classes (weekends, holidays), show who has class next and when,
+  // with a button to jump there, so the Today page is never just blank.
+  async function showNextClassDay(fromDate) {
+    const todayStr = getTodayLocalDateStr();
+    dashboardNext.hidden = true;
+    dashboardNext.innerHTML = '';
+    dashboardEmptyTitle.textContent = fromDate === todayStr
+      ? `No classes today (${formatDayName(fromDate)})`
+      : `No classes on ${formatDisplayDate(fromDate)}`;
+    dashboardEmptyText.textContent = 'Classes run Monday to Friday.';
+
+    try {
+      const data = await apiRequest('/api/schedule');
+      if (state.selectedDate !== fromDate) return; // teacher moved on meanwhile
+
+      const studentById = new Map(data.students.map(st => [st.id, st]));
+      const upcoming = data.sessions.filter(s => s.scheduled_date > fromDate && s.status === 'Pending');
+      if (!upcoming.length) {
+        dashboardEmptyText.textContent += data.students.length
+          ? ' There are no upcoming classes.'
+          : ' Add a student with "+ Add Student" to get started.';
+        return;
+      }
+
+      const nextDate = upcoming[0].scheduled_date; // sessions come sorted by date
+      const students = upcoming
+        .filter(s => s.scheduled_date === nextDate)
+        .map(s => studentById.get(s.student_id))
+        .filter(Boolean)
+        .sort((a, b) => a.class_time.localeCompare(b.class_time) || a.name.localeCompare(b.name));
+
+      dashboardNext.innerHTML = `
+        <p class="next-title">Next classes: <strong>${escapeHtml(formatDisplayDate(nextDate))}</strong></p>
+        <ul class="next-list">
+          ${students.map(st => `<li><span class="next-time">${escapeHtml(formatTimeDisplay(st.class_time))}</span><span>${escapeHtml(st.name)}</span></li>`).join('')}
+        </ul>
+        <button type="button" class="btn btn-primary" id="btnGoNextClassDay">Go to ${escapeHtml(formatDayName(nextDate))}</button>`;
+      dashboardNext.hidden = false;
+      document.getElementById('btnGoNextClassDay').addEventListener('click', () => {
+        state.selectedDate = nextDate;
+        loadDashboard();
+      });
+    } catch {
+      // Keep the simple "no classes" message if the lookup fails
+    }
+  }
+
   /**
-   * Checklist dropdown. Tick = attended (Taken).
-   * Untick on TODAY = not ticked yet (Pending; becomes Missed when the day is over).
-   * Untick on a PAST day = not attended (Missed, makeup added).
-   * Ticking a past Missed class gives the class back (its makeup is removed).
+   * Checklist dropdown. Tick = attended.
+   *
+   * Monday–Friday: lists the students who have a class that day.
+   *   Untick on TODAY = not ticked yet (becomes Missed when the day is over).
+   *   Untick on a PAST day = not attended (Missed, makeup added).
+   *   Ticking a past Missed class gives the class back (its makeup is removed).
+   *
+   * Saturday/Sunday: lists every student still in their course (`candidates`) plus
+   *   anyone already ticked that day. Tick = extra weekend class (their last class is
+   *   removed from the end). Untick = weekend class removed, last class comes back.
+   *   Not ticked = nothing happens (the weekend is not a normal class day).
    */
-  function renderChecklist(sessions) {
+  function renderChecklist(sessions, candidates = []) {
     const todayStr = getTodayLocalDateStr();
     const day = state.selectedDate;
     const isFuture = day > todayStr;
     const isPast = day < todayStr;
+    const weekendDay = isWeekendStr(day);
     const attended = sessions.filter(s => s.status === 'Taken').length;
+    const total = sessions.length + candidates.length;
 
-    checklistCount.textContent = `${attended} of ${sessions.length} attended`;
-    checklistHint.textContent = isFuture
-      ? 'This day is in the future. Students can be ticked on the day of their class.'
-      : isPast
-        ? 'Past day: tick students who attended. Anyone left unticked counted as missed, and a makeup class was added at the end of their schedule.'
-        : 'Tick each student who attended. Anyone not ticked by the end of today counts as missed, and a makeup class is added at the end of their schedule.';
+    checklistCount.textContent = `${attended} of ${total} ${weekendDay ? 'came' : 'attended'}`;
+    if (isFuture) {
+      checklistHint.textContent = 'This day is in the future. Students can be ticked on the day of their class.';
+    } else if (weekendDay) {
+      checklistHint.textContent = `${formatDayName(day)} is an extra day. Tick the students who came: each tick counts as one class, and their last class is removed from the end of the schedule. Students not ticked are not affected.`;
+    } else if (isPast) {
+      checklistHint.textContent = 'Past day: tick students who attended. Anyone left unticked counted as missed, and a makeup class was added at the end of their schedule.';
+    } else {
+      checklistHint.textContent = 'Tick each student who attended. Anyone not ticked by the end of today counts as missed, and a makeup class is added at the end of their schedule.';
+    }
+
+    // One row per student: existing classes first, then weekend candidates
+    const rows = [
+      ...sessions.map(s => ({ ...s, candidate: false })),
+      ...candidates.map(c => ({ ...c, candidate: true, status: 'None' }))
+    ].sort((a, b) => (a.class_time || '').localeCompare(b.class_time || '') || a.student_name.localeCompare(b.student_name));
 
     checklistItems.innerHTML = '';
     let focusRow = null;
 
-    sessions.forEach(s => {
+    rows.forEach(s => {
       const checked = s.status === 'Taken';
-      const disabled = isFuture || !!s.is_weekend;
-      const stateClass = s.status === 'Taken' ? 'ci-taken' : s.status === 'Missed' ? 'ci-missed' : (isFuture ? 'ci-upcoming' : 'ci-open');
-      const statusText = s.status === 'Taken' ? 'Attended'
-        : s.status === 'Missed' ? 'Missed'
-        : isFuture ? 'Upcoming' : 'Not ticked yet';
-      const meta = s.status === 'Missed'
-        ? 'not counted'
-        : `Class ${s.class_number} of ${s.max_sessions || 20}`;
+      // Weekday view: weekend classes are shown but changed from the weekend day itself
+      const disabled = isFuture || (!weekendDay && !!s.is_weekend);
+      let stateClass, statusText, meta;
+      if (s.candidate) {
+        stateClass = isFuture ? 'ci-upcoming' : 'ci-open';
+        statusText = 'Not ticked';
+        meta = `${s.completed_count} of ${s.max_sessions || 20} done · ${s.pending_count} left`;
+      } else {
+        stateClass = s.status === 'Taken' ? 'ci-taken' : s.status === 'Missed' ? 'ci-missed' : (isFuture ? 'ci-upcoming' : 'ci-open');
+        statusText = s.status === 'Taken' ? (weekendDay ? 'Came' : 'Attended')
+          : s.status === 'Missed' ? 'Missed'
+          : isFuture ? 'Upcoming' : 'Not ticked yet';
+        meta = s.status === 'Missed' ? 'not counted' : `Class ${s.class_number} of ${s.max_sessions || 20}`;
+        if (s.is_weekend) meta += ' · <span class="tag-weekend">Extra weekend class</span>';
+      }
 
       const li = document.createElement('li');
       li.className = `checklist-item ${stateClass}`;
       li.innerHTML = `
         <label class="ci-label">
           <input type="checkbox" class="ci-check" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}
-                 aria-label="${escapeHtml(s.student_name)} attended">
+                 aria-label="${escapeHtml(s.student_name)} ${weekendDay ? 'came' : 'attended'}">
           <span class="ci-time">${escapeHtml(formatTimeDisplay(s.class_time))}</span>
           <span class="ci-name">${escapeHtml(s.student_name)}</span>
-          <span class="ci-meta">${meta}${s.is_weekend ? ' · <span class="tag-weekend">Extra weekend class</span>' : ''}</span>
+          <span class="ci-meta">${meta}</span>
         </label>
         <span class="ci-status">${statusText}</span>
         <button type="button" class="ci-cal" title="Open ${escapeHtml(s.student_name)}'s calendar" aria-label="Open ${escapeHtml(s.student_name)}'s calendar">📅</button>
       `;
 
       const box = li.querySelector('.ci-check');
-      box.addEventListener('change', () => onChecklistToggle(s, box));
+      box.addEventListener('change', () => (weekendDay ? onWeekendToggle(s, box) : onChecklistToggle(s, box)));
       li.querySelector('.ci-cal').addEventListener('click', () => switchView('profile', s.student_id));
 
       if (state.attendancePreselectStudentId && String(s.student_id) === String(state.attendancePreselectStudentId)) {
@@ -458,6 +536,25 @@
       fromStatus: s.status
     });
     if (!done) box.checked = !box.checked; // teacher cancelled the confirmation
+  }
+
+  // Saturday/Sunday: tick = add an extra class, untick = remove it again
+  async function onWeekendToggle(s, box) {
+    const day = state.selectedDate;
+    try {
+      const data = await withButtonsDisabled(attendanceChecklist, () => box.checked
+        ? apiRequest('/api/sessions/weekend', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ student_id: s.student_id, date: day })
+          })
+        : apiRequest(`/api/sessions/${s.session_id}?today=${encodeURIComponent(getTodayLocalDateStr())}`, { method: 'DELETE' })
+      );
+      showToast(data.message || 'Saved', 'success');
+    } catch (err) {
+      showToast(`Action failed: ${err.message}`, 'error');
+    }
+    refreshCurrentView();
   }
 
   function refreshCurrentView() {
@@ -559,7 +656,6 @@
     if (!data) return;
     const todayStr = getTodayLocalDateStr();
     const filterId = scheduleFilter.value;
-    const showPast = schedulePastToggle.checked;
     const studentById = new Map(data.students.map(st => [st.id, st]));
 
     // Class numbers (#1..#20, Missed not counted) and each student's last class
@@ -578,29 +674,28 @@
     const visibleIds = new Set(visibleStudents.map(st => st.id));
     const visibleSessions = data.sessions.filter(s => visibleIds.has(s.student_id));
 
-    const allDates = visibleSessions.map(s => s.scheduled_date);
-    const firstDate = showPast && allDates.length ? allDates[0] : todayStr;
-    const startWeek = mondayOf(firstDate < todayStr ? firstDate : todayStr);
+    // Only today and the future are shown; past classes live in each student's profile.
+    const startWeek = mondayOf(todayStr);
 
     // Group classes + exam days by date
     const byDate = new Map();
     const push = (date, item) => { if (!byDate.has(date)) byDate.set(date, []); byDate.get(date).push(item); };
     visibleSessions.forEach(s => {
-      if (s.scheduled_date >= startWeek) push(s.scheduled_date, { type: 'class', s, st: studentById.get(s.student_id) });
+      if (s.scheduled_date >= todayStr) push(s.scheduled_date, { type: 'class', s, st: studentById.get(s.student_id) });
     });
     visibleStudents.forEach(st => {
-      if (st.exam_date >= startWeek) push(st.exam_date, { type: 'exam', st });
+      if (st.exam_date && st.exam_date >= todayStr) push(st.exam_date, { type: 'exam', st });
     });
 
     const shownDates = [...byDate.keys()].sort();
     const upcomingCount = visibleSessions.filter(s => s.scheduled_date >= todayStr && s.status === 'Pending').length;
-    const hasFutureClasses = visibleSessions.some(s => s.scheduled_date >= startWeek);
+    const hasFutureClasses = visibleSessions.some(s => s.scheduled_date >= todayStr);
 
     if (!hasFutureClasses) {
       scheduleEmpty.style.display = 'flex';
       scheduleWeeks.innerHTML = '';
       scheduleSubtext.textContent = data.students.length
-        ? 'No classes from this week onward. Tick "Show past weeks" to see earlier classes.'
+        ? 'No classes from today onward.'
         : 'Add a student and their classes will appear here automatically.';
       return;
     }
@@ -624,14 +719,15 @@
         emptyWeeks = 0;
       }
 
-      const days = [0, 1, 2, 3, 4].map(i => offsetDays(week, i));
+      // Weekdays from today onward (days already gone this week are left out)
+      const days = [0, 1, 2, 3, 4].map(i => offsetDays(week, i)).filter(d => d >= todayStr);
       // Saturday/Sunday columns only appear when an extra weekend class (or exam) falls on them
       [5, 6].forEach(i => { const d = offsetDays(week, i); if (byDate.has(d)) days.push(d); });
 
       const weekClassCount = days.reduce((n, d) => n + (byDate.get(d) || []).filter(x => x.type === 'class' && x.s.status !== 'Missed').length, 0);
       const weekLabel = week === thisWeek ? 'This week' : week === offsetDays(thisWeek, 7) ? 'Next week' : `Week of ${formatDisplayDate(week)}`;
 
-      html += `<section class="sched-week${week < thisWeek ? ' is-past-week' : ''}">
+      html += `<section class="sched-week">
         <header class="sched-week-head"><h3>${weekLabel}</h3><span>${weekClassCount} class${weekClassCount === 1 ? '' : 'es'}</span></header>
         <div class="sched-days" style="--days:${days.length}">`;
 
@@ -696,7 +792,6 @@
   }
 
   scheduleFilter.addEventListener('change', renderSchedule);
-  schedulePastToggle.addEventListener('change', renderSchedule);
 
   // ================= View 2: Students Directory =================
   async function loadStudents() {
@@ -753,10 +848,10 @@
         </div>
 
         <div class="card-meta">
-          <div class="card-meta-row">
+          ${student.exam_date ? `<div class="card-meta-row">
             <span>Exam Date:</span>
             <strong>${formatDisplayDate(student.exam_date)}</strong>
-          </div>
+          </div>` : ''}
           <div class="card-meta-row">
             <span>Next Class:</span>
             <span>${student.next_pending_date ? formatDisplayDate(student.next_pending_date) : '—'}</span>
@@ -831,10 +926,13 @@
     profileAvatar.textContent = student.name.charAt(0).toUpperCase();
     profileTime.textContent = '⏰ ' + formatTimeDisplay(student.class_time);
     profileStart.textContent = 'Starts: ' + formatDisplayDate(student.start_date);
-    profileExam.textContent = 'Exam: ' + formatDisplayDate(student.exam_date);
+    // Students without an exam date: hide the exam tags entirely
+    profileExam.textContent = student.exam_date ? 'Exam: ' + formatDisplayDate(student.exam_date) : '';
+    profileExam.hidden = !student.exam_date;
+    profileDaysToExam.hidden = !student.exam_date;
 
     // Computed from the teacher's local date (the server runs in UTC)
-    const daysToExam = daysFromToday(student.exam_date);
+    const daysToExam = student.exam_date ? daysFromToday(student.exam_date) : null;
     if (daysToExam === null) {
       profileDaysToExam.textContent = '';
     } else if (daysToExam < 0) {
@@ -1134,7 +1232,7 @@
     const today = getTodayLocalDateStr();
     document.getElementById('inputStartDate').value = today;
     document.getElementById('inputNextClassDate').value = comingMonday(today);
-    document.getElementById('inputExamDate').value = offsetDays(today, 35);
+    document.getElementById('inputExamDate').value = ''; // optional: most students may not have one yet
     document.getElementById('inputFinishedCount').value = 1;
     applyStudentMode();
 
@@ -1175,7 +1273,10 @@
   // Live preview of what will be scheduled, in plain words
   function updateSchedulePreview() {
     const preview = document.getElementById('schedulePreview');
-    const exam = document.getElementById('inputExamDate').value;
+    // Exam date is optional; without one there is no cutoff
+    const examInput = document.getElementById('inputExamDate').value;
+    const exam = examInput || '9999-12-31';
+    const noExamNote = examInput ? '' : ' No exam date, so there is no cutoff.';
     const todayStr = getTodayLocalDateStr();
     const show = (kind, text) => {
       preview.className = `alert-box alert-${kind}`;
@@ -1205,7 +1306,7 @@
       if (dates.length < left) {
         show('warning', `${done} attended classes will be recorded. Only ${dates.length} of the remaining ${left} classes fit before the exam (${formatDisplayDate(first)} to ${formatDisplayDate(last)}).` + pastNote);
       } else {
-        show(pastNote ? 'warning' : 'info', `${done} attended classes will be recorded. The remaining ${left} classes run Monday to Friday from ${formatDisplayDate(first)} to ${formatDisplayDate(last)}.` + pastNote);
+        show(pastNote ? 'warning' : 'info', `${done} attended classes will be recorded. The remaining ${left} classes run Monday to Friday from ${formatDisplayDate(first)} to ${formatDisplayDate(last)}.` + pastNote + noExamNote);
       }
       return;
     }
@@ -1229,7 +1330,7 @@
     if (dates.length < 20) {
       show('warning', `Only ${dates.length} of 20 classes (Mon–Fri) fit before the exam, last class ${formatDisplayDate(last)}.` + pastNote);
     } else {
-      show(pastNote ? 'warning' : 'info', `20 classes (Mon–Fri) will be scheduled, from ${formatDisplayDate(dates[0])} to ${formatDisplayDate(last)}.` + pastNote);
+      show(pastNote ? 'warning' : 'info', `20 classes (Mon–Fri) will be scheduled, from ${formatDisplayDate(dates[0])} to ${formatDisplayDate(last)}.` + pastNote + noExamNote);
     }
   }
 
@@ -1264,8 +1365,8 @@
     const examDate = document.getElementById('inputExamDate').value;
     const started = isAlreadyStartedMode();
 
-    if (!name || !classTime || !examDate) {
-      showError('Please fill in the name, class time and exam date.');
+    if (!name || !classTime) {
+      showError('Please fill in the name and class time.');
       return;
     }
 
@@ -1275,13 +1376,13 @@
       const done = parseInt(document.getElementById('inputFinishedCount').value, 10);
       if (!nextClass) { showError('Please choose the date of the next class.'); return; }
       if (isNaN(done) || done < 1 || done > 19) { showError('Classes already finished must be a number from 1 to 19.'); return; }
-      if (nextClass >= examDate) { showError('The next class must be before the exam date.'); return; }
+      if (examDate && nextClass >= examDate) { showError('The next class must be before the exam date.'); return; }
       payload.next_class_date = nextClass;
       payload.classes_already_finished = done;
     } else {
       const startDate = document.getElementById('inputStartDate').value;
       if (!startDate) { showError('Please choose the first class date.'); return; }
-      if (startDate >= examDate) { showError('The first class date must be before the exam date.'); return; }
+      if (examDate && startDate >= examDate) { showError('The first class date must be before the exam date.'); return; }
       payload.start_date = startDate;
       payload.classes_already_finished = 0;
     }
@@ -1328,16 +1429,23 @@
     formAddWeekend.reset();
 
     weekendStudentId.value = student.id;
-    weekendStudentLabel.textContent = `For ${student.name} (Exam on ${formatDisplayDate(student.exam_date)})`;
+    weekendStudentLabel.textContent = student.exam_date
+      ? `For ${student.name} (Exam on ${formatDisplayDate(student.exam_date)})`
+      : `For ${student.name}`;
 
     // Suggest today if it's a weekend, otherwise the coming Saturday
     const todayStr = getTodayLocalDateStr();
     const suggested = isWeekendStr(todayStr)
       ? todayStr
       : offsetDays(todayStr, 6 - parseLocalDate(todayStr).getUTCDay());
-    const lastAllowed = offsetDays(student.exam_date, -1);
-    inputWeekendDate.max = lastAllowed;
-    inputWeekendDate.value = suggested <= lastAllowed ? suggested : '';
+    if (student.exam_date) {
+      const lastAllowed = offsetDays(student.exam_date, -1);
+      inputWeekendDate.max = lastAllowed;
+      inputWeekendDate.value = suggested <= lastAllowed ? suggested : '';
+    } else {
+      inputWeekendDate.removeAttribute('max'); // no exam -> no limit
+      inputWeekendDate.value = suggested;
+    }
 
     modalWeekend.style.display = 'flex';
   }

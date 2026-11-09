@@ -4,7 +4,8 @@ import { parseDate, formatDate, getNextWeekday } from './_utils.js';
  * Scenario B makeup: append one Pending class on the next free weekday after the
  * student's latest Pending class (or latest class of any status if none are Pending).
  *
- * - Exam Cutoff Rule: only inserted if the date is strictly BEFORE the exam date.
+ * - Exam Cutoff Rule: only inserted if the date is strictly BEFORE the exam date
+ *   (students without an exam date have no cutoff).
  * - Never grows the schedule beyond max_sessions active (non-Missed) classes.
  * - `floorDate` (YYYY-MM-DD, the teacher's "today"): a makeup is always placed AFTER it,
  *   so a makeup never lands on a day that has already passed.
@@ -45,8 +46,9 @@ export async function scheduleMakeup(db, record, maxSessions, floorDate = null) 
   while (occupied.has(formatDate(next))) next = getNextWeekday(next);
   const nextStr = formatDate(next);
 
+  // No exam date (empty) = no cutoff: the makeup is always added.
   const exam = parseDate(record.exam_date);
-  if (!exam || next.getTime() >= exam.getTime()) {
+  if (exam && next.getTime() >= exam.getTime()) {
     return { inserted: false, reason: 'exam', date: nextStr };
   }
 

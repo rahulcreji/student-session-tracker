@@ -123,8 +123,10 @@
 
           <div id="dashboardEmpty" class="empty-state" style="display: none;">
             <div class="empty-icon">☕</div>
-            <h3>No classes on this day</h3>
-            <p>Classes run Monday to Friday. Use the arrows to pick another day, or open the Schedule to see upcoming classes.</p>
+            <h3 id="dashboardEmptyTitle">No classes on this day</h3>
+            <p id="dashboardEmptyText">Classes run Monday to Friday.</p>
+            <!-- Filled with the next day that has classes, so the page is never just blank -->
+            <div id="dashboardNext" class="next-classes" hidden></div>
           </div>
 
           <!-- Attendance checklist dropdown: tick = attended, untick = not attended -->
@@ -147,23 +149,19 @@
           <div class="section-header schedule-header">
             <div>
               <h2>Class Schedule</h2>
-              <p class="section-subtext" id="scheduleSubtext">Every student's classes with dates and times, until each course finishes.</p>
+              <p class="section-subtext" id="scheduleSubtext">Classes from today until each course finishes, with dates and times.</p>
             </div>
             <div class="schedule-tools">
               <select id="scheduleFilter" class="schedule-filter" aria-label="Show classes for">
                 <option value="">All students</option>
               </select>
-              <label class="schedule-past-toggle">
-                <input type="checkbox" id="schedulePastToggle"> Show past weeks
-              </label>
             </div>
           </div>
 
           <div class="schedule-legend" aria-hidden="true">
-            <span><i class="legend-swatch sc-taken"></i>Attended</span>
             <span><i class="legend-swatch sc-pending"></i>Upcoming</span>
             <span><i class="legend-swatch sc-today"></i>Today, not ticked yet</span>
-            <span><i class="legend-swatch sc-missed"></i>Missed</span>
+            <span><i class="legend-swatch sc-taken"></i>Today, attended</span>
             <span><i class="legend-swatch sc-weekend"></i>Extra weekend class</span>
             <span>🏁 Last class</span>
             <span>🎓 Exam</span>
@@ -426,9 +424,9 @@
           </div>
 
           <div class="form-group">
-            <label for="inputExamDate">Exam Date <span class="required">*</span></label>
-            <input type="date" id="inputExamDate" required>
-            <span class="field-hint">No classes on or after this date</span>
+            <label for="inputExamDate">Exam Date <span class="optional">(optional)</span></label>
+            <input type="date" id="inputExamDate">
+            <span class="field-hint">Leave empty if there is no exam. If set, no classes on or after it.</span>
           </div>
         </div>
 

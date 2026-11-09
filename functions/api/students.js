@@ -83,10 +83,14 @@ export async function onRequestPost(context) {
       return error('Class time is required (HH:MM, 24-hour).', 400);
     }
 
-    const examDateObj = parseDate(exam_date);
-    if (!examDateObj) {
-      return error('Valid exam date (YYYY-MM-DD) is required.', 400);
+    // Exam date is optional: empty = no exam, so no exam cutoff applies.
+    // (The column is NOT NULL, so "no exam" is stored as an empty string.)
+    const hasExam = typeof exam_date === 'string' && exam_date.trim() !== '';
+    const examDateObj = hasExam ? parseDate(exam_date) : null;
+    if (hasExam && !examDateObj) {
+      return error('Exam date must be a valid date (YYYY-MM-DD), or left empty if there is no exam.', 400);
     }
+    const beforeExam = (d) => !examDateObj || d.getTime() < examDateObj.getTime();
 
     const finishedRaw = parseInt(body.classes_already_finished, 10);
     const classesFinished = Math.min(maxSessions, Math.max(0, isNaN(finishedRaw) ? 0 : finishedRaw));
@@ -104,7 +108,7 @@ export async function onRequestPost(context) {
         return error(`This student has already finished all ${maxSessions} classes.`, 400);
       }
       while (!isWeekday(firstRemaining)) firstRemaining = addDays(firstRemaining, 1);
-      if (firstRemaining.getTime() >= examDateObj.getTime()) {
+      if (!beforeExam(firstRemaining)) {
         return error('The next class must be before the exam date.', 400);
       }
       startDateObj = firstRemaining;
@@ -119,14 +123,14 @@ export async function onRequestPost(context) {
       }
     }
 
-    if (startDateObj.getTime() >= examDateObj.getTime()) {
+    if (!beforeExam(startDateObj)) {
       return error('Start date must be before the exam date.', 400);
     }
 
     // Build the schedule first so we never create a student with zero sessions.
     const schedule = [];
     let curr = new Date(startDateObj.getTime());
-    while (schedule.length < maxSessions && curr.getTime() < examDateObj.getTime()) {
+    while (schedule.length < maxSessions && beforeExam(curr)) {
       if (isWeekday(curr)) {
         schedule.push({
           date: formatDate(curr),
@@ -146,7 +150,7 @@ export async function onRequestPost(context) {
     const studentInsertRes = await db.prepare(`
       INSERT INTO students (name, start_date, class_time, exam_date, max_sessions)
       VALUES (?, ?, ?, ?, ?)
-    `).bind(trimmedName, formatDate(startDateObj), trimmedTime, formatDate(examDateObj), maxSessions).run();
+    `).bind(trimmedName, formatDate(startDateObj), trimmedTime, examDateObj ? formatDate(examDateObj) : '', maxSessions).run();
 
     const studentId = studentInsertRes.meta?.last_row_id;
     if (!studentId) {

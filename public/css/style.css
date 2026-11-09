@@ -1887,7 +1887,7 @@ button.cal-day:focus-visible {
   .sched-days { grid-template-columns: 1fr; }
   .sched-day { min-height: 0; }
   .sched-day.is-empty { display: none; }
-  .sched-day-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .sched-day-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(135px, 1fr)); }
 }
 
 .sched-gap {
@@ -1957,4 +1957,54 @@ button.cal-day:focus-visible {
 
 @media (max-width: 420px) {
   .mode-switch { grid-template-columns: 1fr; }
+}
+
+.optional {
+  font-weight: 400;
+  color: var(--gray-500);
+  font-size: 0.8125rem;
+}
+
+/* ================= Today: "next classes" on a day without classes ================= */
+.next-classes {
+  margin-top: 1.25rem;
+  width: 100%;
+  max-width: 420px;
+  text-align: left;
+  background: var(--primary-light);
+  border: 1px solid var(--primary-border);
+  border-radius: var(--radius-md);
+  padding: 1rem 1.125rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.next-title {
+  font-size: 0.9375rem;
+  color: var(--gray-800);
+}
+
+.next-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.next-list li {
+  display: flex;
+  gap: 0.75rem;
+  font-weight: 600;
+  color: var(--gray-900);
+}
+
+.next-time {
+  color: var(--primary);
+  font-weight: 700;
+  min-width: 72px;
+}
+
+.next-classes .btn {
+  align-self: flex-start;
 }

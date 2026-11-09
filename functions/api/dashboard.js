@@ -1,4 +1,4 @@
-import { json, error, formatDate } from './_utils.js';
+import { json, error, formatDate, parseDate, isWeekend } from './_utils.js';
 
 export async function onRequestGet(context) {
   try {
@@ -53,11 +53,36 @@ export async function onRequestGet(context) {
       missed: results.filter(r => r.status === 'Missed').length,
     };
 
+    // Saturday/Sunday: every student still in their course can be ticked for an extra class.
+    // "Candidates" = students with classes left, no class on this date yet, and (if they
+    // have an exam) the exam is after this date.
+    let candidates = [];
+    const day = parseDate(targetDate);
+    if (day && isWeekend(day)) {
+      const { results: rows } = await db.prepare(`
+        SELECT
+          st.id AS student_id,
+          st.name AS student_name,
+          st.class_time,
+          st.exam_date,
+          st.max_sessions,
+          (SELECT COUNT(*) FROM sessions WHERE student_id = st.id AND status = 'Taken') AS completed_count,
+          (SELECT COUNT(*) FROM sessions WHERE student_id = st.id AND status = 'Pending') AS pending_count
+        FROM students st
+        WHERE EXISTS (SELECT 1 FROM sessions p WHERE p.student_id = st.id AND p.status = 'Pending')
+          AND NOT EXISTS (SELECT 1 FROM sessions d WHERE d.student_id = st.id AND d.scheduled_date = ?)
+          AND (st.exam_date = '' OR st.exam_date > ?)
+        ORDER BY st.class_time ASC, st.name COLLATE NOCASE ASC
+      `).bind(targetDate, targetDate).all();
+      candidates = rows || [];
+    }
+
     return json({
       success: true,
       date: targetDate,
       summary,
-      sessions: results || []
+      sessions: results || [],
+      weekend_candidates: candidates
     });
   } catch (err) {
     return error(`Failed to load dashboard: ${err.message}`, 500);

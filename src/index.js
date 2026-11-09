@@ -25,7 +25,7 @@ const routes = [
   [/^\/api\/schedule$/, { GET: schedule.onRequestGet }],
   [/^\/api\/sessions\/weekend$/, { POST: sessionWeekend.onRequestPost }],
   [/^\/api\/sessions\/close-days$/, { POST: sessionsCloseDays.onRequestPost }],
-  [/^\/api\/sessions\/(?<id>\d+)$/, { PATCH: sessionById.onRequestPatch }],
+  [/^\/api\/sessions\/(?<id>\d+)$/, { PATCH: sessionById.onRequestPatch, DELETE: sessionById.onRequestDelete }],
 ];
 
 async function handleApiRequest(request, env) {
