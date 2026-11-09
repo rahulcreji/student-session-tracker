@@ -970,6 +970,12 @@
     let classNumber = 0;
 
     sessions.forEach((s) => {
+      // Past days are only shown on the Today page (for ticking/unticking).
+      // Still count them so class numbers (#n) stay correct.
+      if (s.scheduled_date < todayStr) {
+        if (s.status !== 'Missed') classNumber++;
+        return;
+      }
       const row = document.createElement('div');
 
       const isPending = s.status === 'Pending';
@@ -1008,6 +1014,10 @@
       sessionsTimeline.appendChild(row);
     });
 
+    if (!sessionsTimeline.children.length) {
+      sessionsTimeline.innerHTML = '<p class="muted-note">No upcoming classes. This course is finished.</p>';
+    }
+
     renderCalendar();
   }
 
@@ -1039,20 +1049,18 @@
     return byDate;
   }
 
-  // Months the calendar can navigate between: course start .. exam (or last session if later)
+  // Months the calendar can navigate between: this month .. exam (or last class if later).
+  // Past months are not shown; past days are only on the Today page.
   function calendarRange(student, sessions) {
+    const thisMonth = getTodayLocalDateStr().slice(0, 7);
     const dates = sessions.map(s => s.scheduled_date);
-    const first = [student.start_date, ...dates].sort()[0];
-    const last = [student.exam_date, ...dates].sort().slice(-1)[0];
-    return { min: first.slice(0, 7), max: last.slice(0, 7) };
+    const last = [student.exam_date || '', ...dates].sort().slice(-1)[0] || getTodayLocalDateStr();
+    const lastMonth = last.slice(0, 7);
+    return { min: thisMonth, max: lastMonth > thisMonth ? lastMonth : thisMonth };
   }
 
-  function pickDefaultMonth(student, sessions) {
-    const { min, max } = calendarRange(student, sessions);
-    const thisMonth = getTodayLocalDateStr().slice(0, 7);
-    if (thisMonth >= min && thisMonth <= max) return thisMonth;
-    const nextPending = sessions.find(s => s.status === 'Pending');
-    return (nextPending ? nextPending.scheduled_date : student.start_date).slice(0, 7);
+  function pickDefaultMonth() {
+    return getTodayLocalDateStr().slice(0, 7);
   }
 
   function renderCalendar() {
@@ -1087,6 +1095,11 @@
       }
 
       const dateStr = `${ym}-${String(dayNum).padStart(2, '0')}`;
+      // Past days are left blank here; they are ticked/unticked on the Today page only
+      if (dateStr < todayStr) {
+        html += `<div class="cal-day cal-past"><span class="cal-num">${dayNum}</span></div>`;
+        continue;
+      }
       const entry = index.get(dateStr);
       const isExam = dateStr === student.exam_date;
       const isWeekendCol = cell % 7 >= 5;

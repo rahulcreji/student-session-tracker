@@ -2008,3 +2008,16 @@ button.cal-day:focus-visible {
 .next-classes .btn {
   align-self: flex-start;
 }
+
+/* Profile calendar: past days are blank (they are managed on the Today page) */
+.cal-past {
+  background: transparent;
+  border-style: dashed;
+  color: var(--gray-300);
+}
+
+.muted-note {
+  font-size: 0.875rem;
+  color: var(--gray-500);
+  padding: 0.75rem 0;
+}
