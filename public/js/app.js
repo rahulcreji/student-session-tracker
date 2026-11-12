@@ -78,12 +78,10 @@
   const checklistItems = document.getElementById('checklistItems');
 
   // Timetable view
-  const ttLength = document.getElementById('ttLength');
   const ttLayout = document.getElementById('ttLayout');
   const ttBoard = document.getElementById('ttBoard');
   const ttFree = document.getElementById('ttFree');
   const ttFreeSub = document.getElementById('ttFreeSub');
-  const ttClasses = document.getElementById('ttClasses');
   const ttCopyFree = document.getElementById('ttCopyFree');
   const scheduleLoading = document.getElementById('scheduleLoading');
   const scheduleEmpty = document.getElementById('scheduleEmpty');
@@ -623,10 +621,10 @@
   // No dates: every student with classes left is shown at their usual class time on each
   // weekday, with the free time between classes, so the teacher can tell students when
   // she is free. Dates and progress live in the Students table.
-  const TT_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+  const TT_CLASS_MINUTES = 60;      // every class is 1 hour
   const TT_PX_PER_HOUR = 76;
   const TT_DEFAULT_START = 7 * 60;  // 7:00 AM
-  const TT_DEFAULT_END = 23 * 60;   // 11:00 PM
+  const TT_DEFAULT_END = 24 * 60 + 30; // 12:30 AM (after midnight)
   const TT_MIN_FREE = 30;           // only show free gaps of 30 minutes or more
 
   const toMinutes = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + (m || 0); };
@@ -645,12 +643,6 @@
     return a.slice(-2) === b.slice(-2) ? `${a.slice(0, -3)} – ${b}` : `${a} – ${b}`;
   };
 
-  // Remember the chosen class length on this device only
-  try {
-    const saved = localStorage.getItem('tt_class_length');
-    if (saved && [...ttLength.options].some(o => o.value === saved)) ttLength.value = saved;
-  } catch { /* storage unavailable: keep default */ }
-
   async function loadSchedule() {
     scheduleLoading.style.display = 'flex';
     scheduleEmpty.style.display = 'none';
@@ -668,7 +660,7 @@
   }
 
   function renderTimetable() {
-    const length = parseInt(ttLength.value, 10) || 60;
+    const length = TT_CLASS_MINUTES; // every class is 1 hour
     // Only students who still have classes left
     const active = (state.timetableStudents || []).filter(st => (st.pending_count || 0) > 0 && st.class_time);
 
@@ -705,11 +697,11 @@
     });
     flush();
 
-    // Visible day: 7 AM – 9 PM, stretched to whole hours around any earlier/later class
+    // Day runs 7:00 AM – 12:30 AM; stretched only if a class starts earlier or ends later
     const dayStart = Math.min(TT_DEFAULT_START, Math.floor(blocks[0].start / 60) * 60);
-    const dayEnd = Math.max(TT_DEFAULT_END, Math.ceil(Math.max(...blocks.map(b => b.end)) / 60) * 60);
+    const dayEnd = Math.max(TT_DEFAULT_END, Math.ceil(Math.max(...blocks.map(b => b.end)) / 30) * 30);
 
-    // Free gaps between dayStart and dayEnd
+    // Free gaps (30 minutes or more)
     const free = [];
     let cursor = dayStart;
     blocks.forEach(b => {
@@ -719,76 +711,72 @@
     if (dayEnd - cursor >= TT_MIN_FREE) free.push({ start: cursor, end: dayEnd });
     state.timetableFree = free;
 
-    const px = (mins) => ((mins - dayStart) / 60) * TT_PX_PER_HOUR;
-    const height = px(dayEnd);
+    const personHtml = (s) => `<span class="ag-person"><b>${escapeHtml(s.name)}</b>${s.expected_end_date ? `<small>ends ${escapeHtml(shortDate(s.expected_end_date))}</small>` : ''}</span>`;
 
-    // Hour labels
-    let hoursHtml = '';
-    for (let m = dayStart; m <= dayEnd; m += 60) {
-      hoursHtml += `<span class="tt-hour" style="top:${px(m)}px">${minutesToLabel(m).replace(':00', '')}</span>`;
+    // ---- 1. Day bar: the whole day on one line (blue = class, green = free) ----
+    const span = dayEnd - dayStart;
+    const pct = (m) => ((m - dayStart) / span) * 100;
+    const lanesMax = Math.max(1, ...blocks.map(b => b.lanes || 1));
+    const barFree = free.map(f => `<div class="tl-free" style="left:${pct(f.start)}%;width:${pct(f.end) - pct(f.start)}%" title="Free ${rangeLabel(f.start, f.end)}"></div>`).join('');
+    const barClasses = blocks.map(b => `
+      <button type="button" class="tl-class${state.highlightStudentId && b.students.some(s => String(s.id) === String(state.highlightStudentId)) ? ' is-new' : ''}"
+        data-ids="${b.students.map(s => s.id).join(',')}"
+        style="left:${pct(b.start)}%;width:${pct(b.end) - pct(b.start)}%;top:${(b.lane / lanesMax) * 100}%;height:${100 / lanesMax}%"
+        title="${rangeLabel(b.start, b.end)}: ${escapeHtml(b.students.map(s => s.name).join(', '))}">
+        <span>${escapeHtml(b.students.map(s => s.name.split(' ')[0]).join(', '))}</span>
+      </button>`).join('');
+    let ticks = '';
+    for (let m = Math.ceil(dayStart / 60) * 60; m <= dayEnd; m += 120) {
+      ticks += `<span class="tl-tick" style="left:${pct(m)}%">${minutesToLabel(m).replace(':00', '')}</span>`;
     }
 
-    // One day column (identical Mon–Fri, since class times repeat every weekday)
-    const freeHtml = free.map(f => `
-      <div class="tt-free" style="top:${px(f.start)}px;height:${px(f.end) - px(f.start)}px" title="Free ${minutesToLabel(f.start)} – ${minutesToLabel(f.end)}">
-        <span>Free · ${rangeLabel(f.start, f.end)}</span>
-      </div>`).join('');
-    const blocksHtml = blocks.map(b => {
-      const names = b.students.map(s => escapeHtml(s.name)).join(', ');
-      // Each student with their expected completion date (last class that will happen)
-      const people = b.students.map(s => `<span class="tt-person"><b>${escapeHtml(s.name)}</b>${s.expected_end_date ? `<span class="tt-end" title="Expected end">ends ${escapeHtml(shortDate(s.expected_end_date))}</span>` : ''}</span>`).join('');
-      const peopleTitle = b.students.map(s => s.name + (s.expected_end_date ? ` (ends ${formatDisplayDate(s.expected_end_date)})` : '')).join(', ');
-      const isNew = state.highlightStudentId && b.students.some(s => String(s.id) === String(state.highlightStudentId));
-      const width = 100 / b.lanes;
-      return `
-        <button type="button" class="tt-block${isNew ? ' is-new' : ''}" data-ids="${b.students.map(s => s.id).join(',')}"
-          style="top:${px(b.start)}px;height:${px(b.end) - px(b.start)}px;left:calc(${b.lane * width}% + 2px);width:calc(${width}% - 4px)"
-          title="${rangeLabel(b.start, b.end)}: ${escapeHtml(peopleTitle)}">
-          <span class="tt-block-time">${rangeLabel(b.start, b.end)}</span>
-          <span class="tt-block-names">${people}</span>
-        </button>`;
-    }).join('');
-
-    const columns = TT_DAYS.map((d, i) => `
-      <div class="tt-col${i > 0 ? ' tt-col-extra' : ''}">
-        <div class="tt-col-head"><span class="tt-day-short">${d}</span><span class="tt-day-all">Every weekday (Mon – Fri)</span></div>
-        <div class="tt-col-body" style="height:${height}px">${freeHtml}${blocksHtml}</div>
-      </div>`).join('');
+    // ---- 2. Day list: one short row per slot, in time order ----
+    const items = [
+      ...blocks.map(b => ({ kind: 'class', start: b.start, end: b.end, b })),
+      ...free.map(f => ({ kind: 'free', start: f.start, end: f.end }))
+    ].sort((a, b) => a.start - b.start || (a.kind === 'free' ? -1 : 1));
+    const rows = items.map(it => it.kind === 'free'
+      ? `<li class="ag-row ag-free"><span class="ag-time">${rangeLabel(it.start, it.end)}</span><span class="ag-what">Free · ${durationLabel(it.end - it.start)}</span></li>`
+      : `<li class="ag-row ag-class${state.highlightStudentId && it.b.students.some(s => String(s.id) === String(state.highlightStudentId)) ? ' is-new' : ''}" data-ids="${it.b.students.map(s => s.id).join(',')}" tabindex="0">
+           <span class="ag-time">${rangeLabel(it.start, it.end)}</span>
+           <span class="ag-what">${it.b.students.map(personHtml).join('')}</span>
+         </li>`).join('');
 
     ttBoard.innerHTML = `
-      <div class="tt-hours"><div class="tt-col-head">&nbsp;</div><div class="tt-hours-body" style="height:${height}px">${hoursHtml}</div></div>
-      ${columns}`;
+      <div class="tl-head">
+        <h3>Every weekday · Monday to Friday</h3>
+        <span>${minutesToLabel(dayStart)} – ${minutesToLabel(dayEnd)}</span>
+      </div>
+      <div class="tl-bar" style="--lanes:${lanesMax}">${barFree}${barClasses}</div>
+      <div class="tl-ticks">${ticks}</div>
+      <ol class="ag-list">${rows}</ol>`;
 
-    ttBoard.querySelectorAll('.tt-block').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const ids = btn.dataset.ids.split(',');
-        if (ids.length === 1) switchView('profile', Number(ids[0]));
-        else switchView('students'); // several students share this time: show them in the table
-      });
+    // Clicking a class opens the student (or the Students table if several share the time)
+    const openIds = (ids) => {
+      const list = ids.split(',');
+      if (list.length === 1) switchView('profile', Number(list[0]));
+      else switchView('students');
+    };
+    ttBoard.querySelectorAll('.tl-class, .ag-class').forEach(el => {
+      el.addEventListener('click', () => openIds(el.dataset.ids));
+      el.addEventListener('keydown', (e) => { if (e.key === 'Enter') openIds(el.dataset.ids); });
     });
 
-    // Side lists
+    // Side panel: free time list with Copy
     ttFree.innerHTML = free.length
-      ? free.map(f => `<li><span class="tt-li-time">${minutesToLabel(f.start)} – ${minutesToLabel(f.end)}</span><span class="tt-li-meta">${durationLabel(f.end - f.start)}</span></li>`).join('')
+      ? free.map(f => `<li><span class="tt-li-time">${rangeLabel(f.start, f.end)}</span><span class="tt-li-meta">${durationLabel(f.end - f.start)}</span></li>`).join('')
       : '<li class="tt-li-empty">No free gaps of 30 minutes or more.</li>';
-    ttFreeSub.textContent = `Monday to Friday, ${minutesToLabel(dayStart)} – ${minutesToLabel(dayEnd)}, with ${durationLabel(length)} classes`;
-    ttClasses.innerHTML = blocks.map(b => `
-      <li><span class="tt-li-time">${rangeLabel(b.start, b.end)}</span><span class="tt-li-names">${b.students.map(s => `<span class="tt-li-person">${escapeHtml(s.name)}</span>`).join('')}</span></li>`).join('');
+    ttFreeSub.textContent = `Monday to Friday, ${minutesToLabel(dayStart)} – ${minutesToLabel(dayEnd)}`;
 
     scheduleSubtext.textContent = `${active.length} student${active.length === 1 ? '' : 's'} · ${blocks.length} class time${blocks.length === 1 ? '' : 's'} · ${free.length} free slot${free.length === 1 ? '' : 's'} every weekday`;
 
     if (state.highlightStudentId) {
       state.highlightStudentId = null;
-      const first = ttBoard.querySelector('.tt-block.is-new');
+      const first = ttBoard.querySelector('.ag-row.is-new');
       if (first) setTimeout(() => first.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
       setTimeout(() => ttBoard.querySelectorAll('.is-new').forEach(el => el.classList.remove('is-new')), 6000);
     }
   }
-
-  ttLength.addEventListener('change', () => {
-    try { localStorage.setItem('tt_class_length', ttLength.value); } catch { /* ignore */ }
-    renderTimetable();
-  });
 
   // Copy the free times as a short message the teacher can paste to a student
   ttCopyFree.addEventListener('click', async () => {

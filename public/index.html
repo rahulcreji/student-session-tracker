@@ -145,18 +145,9 @@
           <div class="section-header schedule-header">
             <div>
               <h2>Weekly Timetable</h2>
-              <p class="section-subtext" id="scheduleSubtext">Each student's usual class time, Monday to Friday.</p>
+              <p class="section-subtext" id="scheduleSubtext">Each student's class time. Every weekday (Monday to Friday) is the same.</p>
             </div>
-            <div class="schedule-tools">
-              <label class="tt-length" for="ttLength">Class length
-                <select id="ttLength" class="schedule-filter">
-                  <option value="30">30 min</option>
-                  <option value="45">45 min</option>
-                  <option value="60" selected>1 hour</option>
-                  <option value="90">1½ hours</option>
-                </select>
-              </label>
-            </div>
+
           </div>
 
           <div id="scheduleLoading" class="loading-state" style="display: none;">
@@ -176,7 +167,6 @@
               <div class="tt-legend" aria-hidden="true">
                 <span><i class="tt-swatch tt-swatch-class"></i>Class</span>
                 <span><i class="tt-swatch tt-swatch-free"></i>Free time</span>
-                <span><span class="tt-end">ends 11 Dec</span> Expected end of course</span>
               </div>
             </div>
             <aside class="tt-side">
@@ -187,10 +177,6 @@
                 </div>
                 <p class="tt-card-sub" id="ttFreeSub">Monday to Friday</p>
                 <ul id="ttFree" class="tt-list tt-free-list"></ul>
-              </div>
-              <div class="tt-card">
-                <h3>Classes by time</h3>
-                <ul id="ttClasses" class="tt-list"></ul>
               </div>
             </aside>
           </div>
