@@ -773,7 +773,7 @@
       : '<li class="tt-li-empty">No free gaps of 30 minutes or more.</li>';
     ttFreeSub.textContent = `Monday to Friday, ${minutesToLabel(dayStart)} – ${minutesToLabel(dayEnd)}, with ${durationLabel(length)} classes`;
     ttClasses.innerHTML = blocks.map(b => `
-      <li><span class="tt-li-time">${rangeLabel(b.start, b.end)}</span><span class="tt-li-names">${b.students.map(s => `<span class="tt-li-person">${escapeHtml(s.name)}${s.expected_end_date ? `<small>ends ${escapeHtml(shortDate(s.expected_end_date))}</small>` : ''}</span>`).join('')}</span></li>`).join('');
+      <li><span class="tt-li-time">${rangeLabel(b.start, b.end)}</span><span class="tt-li-names">${b.students.map(s => `<span class="tt-li-person">${escapeHtml(s.name)}</span>`).join('')}</span></li>`).join('');
 
     scheduleSubtext.textContent = `${active.length} student${active.length === 1 ? '' : 's'} · ${blocks.length} class time${blocks.length === 1 ? '' : 's'} · ${free.length} free slot${free.length === 1 ? '' : 's'} every weekday`;
 
