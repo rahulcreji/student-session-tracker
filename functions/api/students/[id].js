@@ -1,4 +1,5 @@
-import { json, error, parseDate, formatDate } from '../_utils.js';
+import { json, error, parseDate, formatDate, addDays, isWeekday } from '../_utils.js';
+import { scheduleMakeup, validateClientToday } from '../_schedule.js';
 
 /**
  * GET /api/students/[id]
@@ -177,6 +178,28 @@ export async function onRequestPatch(context) {
       }, 409);
     }
 
+    // "Classes attended so far": validate before changing anything
+    const maxSessions = student.max_sessions || 20;
+    let delta = 0;
+    if (body.classes_attended !== undefined && body.classes_attended !== null && body.classes_attended !== '') {
+      const target = parseInt(body.classes_attended, 10);
+      if (isNaN(target) || target < 0 || target > maxSessions) {
+        return error(`Classes attended must be a number from 0 to ${maxSessions}.`, 400);
+      }
+      const counts = await db.prepare(`
+        SELECT
+          SUM(CASE WHEN status = 'Taken' THEN 1 ELSE 0 END) AS taken,
+          SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) AS pending
+        FROM sessions WHERE student_id = ?
+      `).bind(studentId).first();
+      const taken = counts?.taken || 0;
+      const pendingLeft = (counts?.pending || 0) - affected.length;
+      delta = target - taken;
+      if (delta > pendingLeft) {
+        return error(`Only ${pendingLeft} class(es) are left, so classes attended can be at most ${taken + pendingLeft}.`, 400);
+      }
+    }
+
     const stmts = [
       db.prepare(`UPDATE students SET name = ?, class_time = ?, exam_date = ? WHERE id = ?`)
         .bind(name, classTime, examDate, studentId)
@@ -186,11 +209,64 @@ export async function onRequestPatch(context) {
     ));
     await db.batch(stmts);
 
+    // Apply the change in classes attended, keeping the total at max_sessions
+    let attendedNote = '';
+    if (delta > 0) {
+      // Record the extra attended classes on free weekdays just before the first class,
+      // and remove the same number of classes from the end of the schedule.
+      const { results: rows } = await db.prepare(`SELECT scheduled_date FROM sessions WHERE student_id = ?`).bind(studentId).all();
+      const occupied = new Set((rows || []).map(r => r.scheduled_date));
+      const earliest = [...occupied].sort()[0] || formatDate(new Date());
+      let d = parseDate(earliest);
+      const ops = [];
+      for (let added = 0; added < delta; ) {
+        d = addDays(d, -1);
+        const ds = formatDate(d);
+        if (isWeekday(d) && !occupied.has(ds)) {
+          ops.push(db.prepare(`INSERT INTO sessions (student_id, scheduled_date, status, is_weekend) VALUES (?, ?, 'Taken', 0)`).bind(studentId, ds));
+          occupied.add(ds);
+          added++;
+        }
+      }
+      const { results: lastPending } = await db.prepare(`
+        SELECT id FROM sessions WHERE student_id = ? AND status = 'Pending'
+        ORDER BY scheduled_date DESC, id DESC LIMIT ?
+      `).bind(studentId, delta).all();
+      (lastPending || []).forEach(r => ops.push(db.prepare(`DELETE FROM sessions WHERE id = ? AND status = 'Pending'`).bind(r.id)));
+      await db.batch(ops);
+      attendedNote = ` Classes attended raised by ${delta}; the last ${delta} upcoming class(es) were removed.`;
+    } else if (delta < 0) {
+      // Remove the earliest attended classes and add the same number back at the end.
+      const remove = -delta;
+      const { results: oldest } = await db.prepare(`
+        SELECT id FROM sessions WHERE student_id = ? AND status = 'Taken'
+        ORDER BY scheduled_date ASC, id ASC LIMIT ?
+      `).bind(studentId, remove).all();
+      await db.batch((oldest || []).map(r => db.prepare(`DELETE FROM sessions WHERE id = ?`).bind(r.id)));
+      const today = validateClientToday(body.today);
+      let addedBack = 0;
+      for (let i = 0; i < remove; i++) {
+        const m = await scheduleMakeup(db, { student_id: studentId, scheduled_date: today || formatDate(new Date()), exam_date: examDate }, maxSessions, today);
+        if (!m.inserted) break;
+        addedBack++;
+      }
+      attendedNote = ` Classes attended lowered by ${remove}; ${addedBack} class(es) added at the end.` +
+        (addedBack < remove ? ` ${remove - addedBack} could not be added before the exam date.` : '');
+    }
+    if (delta !== 0) {
+      await db.prepare(`
+        UPDATE students SET start_date = COALESCE((SELECT MIN(scheduled_date) FROM sessions WHERE student_id = ?), start_date)
+        WHERE id = ?
+      `).bind(studentId, studentId).run();
+    }
+
     return json({
       success: true,
       student: { ...student, name, class_time: classTime, exam_date: examDate },
       removed_count: affected.length,
-      message: `${name}: details saved.` + (affected.length ? ` ${affected.length} class(es) after the new exam date were removed.` : '')
+      attended_change: delta,
+      message: `${name}: details saved.` +
+        (affected.length ? ` ${affected.length} class(es) after the new exam date were removed.` : '') + attendedNote
     });
   } catch (err) {
     return error(`Failed to update student: ${err.message}`, 500);

@@ -1630,6 +1630,14 @@
     document.getElementById('editStudentName').value = st.name;
     setTimePicker('editClass', st.class_time);
     document.getElementById('editExamDate').value = st.exam_date || '';
+    const done = state.currentStudentData.metrics.completed_count;
+    const left = state.currentStudentData.metrics.pending_count;
+    const attendedInput = document.getElementById('editClassesAttended');
+    attendedInput.value = done;
+    attendedInput.dataset.original = String(done);
+    attendedInput.max = String(done + left);
+    document.getElementById('editAttendedHint').textContent =
+      `Now ${done} attended, ${left} left. Changing this adds or removes classes at the end, so the total stays ${st.max_sessions || 20}.`;
     modalEditStudent.style.display = 'flex';
     document.getElementById('editStudentName').focus();
   }
@@ -1657,6 +1665,28 @@
       formEditError.textContent = 'Please enter the student name.';
       formEditError.style.display = 'block';
       return;
+    }
+
+    // Classes attended so far: only sent when changed, after confirming what will move
+    const attendedInput = document.getElementById('editClassesAttended');
+    const before = parseInt(attendedInput.dataset.original, 10);
+    const after = parseInt(attendedInput.value, 10);
+    if (attendedInput.value !== '' && after !== before) {
+      if (isNaN(after) || after < 0 || after > parseInt(attendedInput.max, 10)) {
+        formEditError.textContent = `Classes attended must be a number from 0 to ${attendedInput.max}.`;
+        formEditError.style.display = 'block';
+        return;
+      }
+      const diff = Math.abs(after - before);
+      const ok = confirm(
+        `Change classes attended from ${before} to ${after}?\n\n` +
+        (after > before
+          ? `The last ${diff} upcoming class${diff === 1 ? ' is' : 'es are'} removed from the end of the schedule.`
+          : `${diff} class${diff === 1 ? ' is' : 'es are'} added at the end of the schedule.`)
+      );
+      if (!ok) return;
+      payload.classes_attended = after;
+      payload.today = getTodayLocalDateStr();
     }
 
     const save = (extra = {}) => withButtonsDisabled(formEditStudent, () =>

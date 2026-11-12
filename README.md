@@ -49,7 +49,7 @@ Future days can’t be ticked, and weekend classes aren’t changed from the che
 | GET | `/api/dashboard?date=YYYY-MM-DD` | Classes on a date (+ class number and per-student counts) |
 | GET | `/api/schedule` | All students and all classes (Schedule view) |
 | GET / POST | `/api/students` | List students with metrics / create student (Scenario A) |
-| GET / PATCH / DELETE | `/api/students/:id` | Profile + all sessions / edit name, class time, exam date (`remove_after_exam` to confirm removing classes past a new exam) / delete student and sessions |
+| GET / PATCH / DELETE | `/api/students/:id` | Profile + all sessions / edit name, class time, exam date (`remove_after_exam` to confirm removing classes past a new exam) and `classes_attended` (extra/fewer classes taken off/added at the end) / delete student and sessions |
 | PATCH | `/api/sessions/:id` | `{ "status": "Taken" \| "Missed" \| "Pending" }` (Scenarios D / B, and corrections) |
 | POST | `/api/sessions/weekend` | `{ "student_id", "date" }` (Scenario C) |
 | POST | `/api/sessions/close-days` | `{ "today" }` — weekday classes up to today that are still Pending become attended (default) |
