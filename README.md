@@ -25,8 +25,7 @@ Live: https://student-session-tracker.the-language-formula.workers.dev
 2. The teacher **unticks** students who did not come → `Missed` straight away and a makeup class is added at the end
    (Scenario B). Ticking again gives the class back. On Saturday/Sunday everyone starts unticked; ticking adds an
    extra class (Scenario C).
-3. **Schedule** page → every student's classes week by week (Mon–Fri; Sat/Sun columns only appear for extra classes),
-   with date, time, class number (#/20), 🏁 last class and 🎓 exam, **from today onward only** (history is on each student's profile). Filter by student.
+3. **Schedule** page → a weekly timetable (Mon–Fri, no dates) of every student with classes left at their usual class time, with free gaps (7 AM–9 PM) shown and listed, a Copy button for the free times, and a class-length setting.
 
 ### Correcting a past day
 

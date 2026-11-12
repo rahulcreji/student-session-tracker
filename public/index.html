@@ -139,45 +139,63 @@
       </section>
 
 
-      <!-- ================= VIEW: SCHEDULE (all students, week by week) ================= -->
+      <!-- ================= VIEW: TIMETABLE (usual class times, Monday to Friday) ================= -->
       <section id="viewSchedule" class="app-view" style="display: none;">
         <div class="section-container">
           <div class="section-header schedule-header">
             <div>
-              <h2>Class Schedule</h2>
-              <p class="section-subtext" id="scheduleSubtext">Classes from today until each course finishes, with dates and times.</p>
+              <h2>Weekly Timetable</h2>
+              <p class="section-subtext" id="scheduleSubtext">Each student's usual class time, Monday to Friday.</p>
             </div>
             <div class="schedule-tools">
-              <select id="scheduleFilter" class="schedule-filter" aria-label="Show classes for">
-                <option value="">All students</option>
-              </select>
+              <label class="tt-length" for="ttLength">Class length
+                <select id="ttLength" class="schedule-filter">
+                  <option value="30">30 min</option>
+                  <option value="45">45 min</option>
+                  <option value="60" selected>1 hour</option>
+                  <option value="90">1½ hours</option>
+                </select>
+              </label>
             </div>
-          </div>
-
-          <div class="schedule-legend" aria-hidden="true">
-            <span><i class="legend-swatch sc-pending"></i>Upcoming</span>
-            <span><i class="legend-swatch sc-taken"></i>Attended (today)</span>
-            <span><i class="legend-swatch sc-missed"></i>Missed (today)</span>
-            <span><i class="legend-swatch sc-weekend"></i>Extra weekend class</span>
-            <span>🏁 Last class</span>
-            <span>🎓 Exam</span>
           </div>
 
           <div id="scheduleLoading" class="loading-state" style="display: none;">
             <div class="spinner"></div>
-            <p>Loading schedule...</p>
+            <p>Loading timetable...</p>
           </div>
 
           <div id="scheduleEmpty" class="empty-state" style="display: none;">
             <div class="empty-icon">🗓️</div>
-            <h3>No upcoming classes</h3>
-            <p>Add a student and their classes will appear here automatically.</p>
+            <h3>No classes yet</h3>
+            <p>Add a student and their class time will appear here automatically.</p>
           </div>
 
-          <div id="scheduleWeeks" class="schedule-weeks"></div>
+          <div id="ttLayout" class="tt-layout" hidden>
+            <div class="tt-board-wrap">
+              <div id="ttBoard" class="tt-board" aria-label="Weekly timetable"></div>
+              <div class="tt-legend" aria-hidden="true">
+                <span><i class="tt-swatch tt-swatch-class"></i>Class</span>
+                <span><i class="tt-swatch tt-swatch-free"></i>Free time</span>
+                <span><span class="tt-end">ends 11 Dec</span> Expected end of course</span>
+              </div>
+            </div>
+            <aside class="tt-side">
+              <div class="tt-card">
+                <div class="tt-card-head">
+                  <h3>Free time</h3>
+                  <button type="button" id="ttCopyFree" class="btn btn-secondary tt-copy">Copy</button>
+                </div>
+                <p class="tt-card-sub" id="ttFreeSub">Monday to Friday</p>
+                <ul id="ttFree" class="tt-list tt-free-list"></ul>
+              </div>
+              <div class="tt-card">
+                <h3>Classes by time</h3>
+                <ul id="ttClasses" class="tt-list"></ul>
+              </div>
+            </aside>
+          </div>
         </div>
       </section>
-
 
       <!-- ================= VIEW 2: ALL STUDENTS DIRECTORY ================= -->
       <section id="viewStudents" class="app-view" style="display: none;">

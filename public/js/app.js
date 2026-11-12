@@ -77,11 +77,16 @@
   const checklistHint = document.getElementById('checklistHint');
   const checklistItems = document.getElementById('checklistItems');
 
-  // Schedule view
-  const scheduleFilter = document.getElementById('scheduleFilter');
+  // Timetable view
+  const ttLength = document.getElementById('ttLength');
+  const ttLayout = document.getElementById('ttLayout');
+  const ttBoard = document.getElementById('ttBoard');
+  const ttFree = document.getElementById('ttFree');
+  const ttFreeSub = document.getElementById('ttFreeSub');
+  const ttClasses = document.getElementById('ttClasses');
+  const ttCopyFree = document.getElementById('ttCopyFree');
   const scheduleLoading = document.getElementById('scheduleLoading');
   const scheduleEmpty = document.getElementById('scheduleEmpty');
-  const scheduleWeeks = document.getElementById('scheduleWeeks');
   const scheduleSubtext = document.getElementById('scheduleSubtext');
   const dayTotal = document.getElementById('dayTotal');
   const dayTaken = document.getElementById('dayTaken');
@@ -614,185 +619,190 @@
     return true;
   }
 
-  // ================= View: Schedule (all students, week by week) =================
-  function mondayOf(dateStr) {
-    const dow = (parseLocalDate(dateStr).getUTCDay() + 6) % 7; // Mon = 0
-    return offsetDays(dateStr, -dow);
-  }
+  // ================= View: Weekly Timetable (usual class times, Mon–Fri) =================
+  // No dates: every student with classes left is shown at their usual class time on each
+  // weekday, with the free time between classes, so the teacher can tell students when
+  // she is free. Dates and progress live in the Students table.
+  const TT_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+  const TT_PX_PER_HOUR = 76;
+  const TT_DEFAULT_START = 7 * 60;  // 7:00 AM
+  const TT_DEFAULT_END = 23 * 60;   // 11:00 PM
+  const TT_MIN_FREE = 30;           // only show free gaps of 30 minutes or more
 
-  function shortDay(dateStr) {
-    const d = parseLocalDate(dateStr);
-    return {
-      weekday: d.toLocaleDateString(undefined, { timeZone: 'UTC', weekday: 'short' }),
-      date: d.toLocaleDateString(undefined, { timeZone: 'UTC', day: 'numeric', month: 'short' })
-    };
-  }
+  const toMinutes = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + (m || 0); };
+  const minutesToLabel = (mins) => {
+    const h24 = Math.floor(mins / 60) % 24;
+    const m = mins % 60;
+    return `${h24 % 12 || 12}:${String(m).padStart(2, '0')} ${h24 >= 12 ? 'PM' : 'AM'}`;
+  };
+  const durationLabel = (mins) => mins < 60 ? `${mins} min` : (mins % 60 ? `${Math.floor(mins / 60)} hr ${mins % 60} min` : `${mins / 60} hr`);
+  // "8:00 – 9:00 AM" when both are AM (or PM), otherwise "11:30 AM – 12:30 PM"
+  // "11 Dec" (short date for timetable blocks)
+  const shortDate = (dateStr) => parseLocalDate(dateStr).toLocaleDateString(undefined, { timeZone: "UTC", day: "numeric", month: "short" });
+  const rangeLabel = (start, end) => {
+    const a = minutesToLabel(start);
+    const b = minutesToLabel(end);
+    return a.slice(-2) === b.slice(-2) ? `${a.slice(0, -3)} – ${b}` : `${a} – ${b}`;
+  };
+
+  // Remember the chosen class length on this device only
+  try {
+    const saved = localStorage.getItem('tt_class_length');
+    if (saved && [...ttLength.options].some(o => o.value === saved)) ttLength.value = saved;
+  } catch { /* storage unavailable: keep default */ }
 
   async function loadSchedule() {
     scheduleLoading.style.display = 'flex';
     scheduleEmpty.style.display = 'none';
-    scheduleWeeks.innerHTML = '';
-
+    ttLayout.hidden = true;
     try {
       await ensurePastDaysClosed();
-      const data = await apiRequest('/api/schedule');
+      const data = await apiRequest('/api/students');
       scheduleLoading.style.display = 'none';
-      state.scheduleData = data;
-
-      // Student filter (keep the current choice if that student still exists)
-      const current = scheduleFilter.value;
-      scheduleFilter.innerHTML = '<option value="">All students</option>' +
-        data.students.map(st => `<option value="${st.id}">${escapeHtml(st.name)} (${escapeHtml(formatTimeDisplay(st.class_time))})</option>`).join('');
-      if (data.students.some(st => String(st.id) === current)) scheduleFilter.value = current;
-
-      renderSchedule();
+      state.timetableStudents = data.students || [];
+      renderTimetable();
     } catch (err) {
       scheduleLoading.style.display = 'none';
       showToast(`Error: ${err.message}`, 'error');
     }
   }
 
-  function renderSchedule() {
-    const data = state.scheduleData;
-    if (!data) return;
-    const todayStr = getTodayLocalDateStr();
-    const filterId = scheduleFilter.value;
-    const studentById = new Map(data.students.map(st => [st.id, st]));
+  function renderTimetable() {
+    const length = parseInt(ttLength.value, 10) || 60;
+    // Only students who still have classes left
+    const active = (state.timetableStudents || []).filter(st => (st.pending_count || 0) > 0 && st.class_time);
 
-    // Class numbers (#1..#20, Missed not counted) and each student's last class
-    const classNo = new Map();
-    const lastClassId = new Map();
-    const counters = new Map();
-    data.sessions.forEach(s => {
-      if (s.status === 'Missed') return;
-      const n = (counters.get(s.student_id) || 0) + 1;
-      counters.set(s.student_id, n);
-      classNo.set(s.id, n);
-      lastClassId.set(s.student_id, s.id);
-    });
-
-    const visibleStudents = data.students.filter(st => !filterId || String(st.id) === filterId);
-    const visibleIds = new Set(visibleStudents.map(st => st.id));
-    const visibleSessions = data.sessions.filter(s => visibleIds.has(s.student_id));
-
-    // Only today and the future are shown; past classes live in each student's profile.
-    const startWeek = mondayOf(todayStr);
-
-    // Group classes + exam days by date
-    const byDate = new Map();
-    const push = (date, item) => { if (!byDate.has(date)) byDate.set(date, []); byDate.get(date).push(item); };
-    visibleSessions.forEach(s => {
-      if (s.scheduled_date >= todayStr) push(s.scheduled_date, { type: 'class', s, st: studentById.get(s.student_id) });
-    });
-    visibleStudents.forEach(st => {
-      if (st.exam_date && st.exam_date >= todayStr) push(st.exam_date, { type: 'exam', st });
-    });
-
-    const shownDates = [...byDate.keys()].sort();
-    const upcomingCount = visibleSessions.filter(s => s.scheduled_date >= todayStr && s.status === 'Pending').length;
-    const hasFutureClasses = visibleSessions.some(s => s.scheduled_date >= todayStr);
-
-    if (!hasFutureClasses) {
+    if (!active.length) {
+      ttLayout.hidden = true;
       scheduleEmpty.style.display = 'flex';
-      scheduleWeeks.innerHTML = '';
-      scheduleSubtext.textContent = data.students.length
-        ? 'No classes from today onward.'
-        : 'Add a student and their classes will appear here automatically.';
+      scheduleSubtext.textContent = "Each student's usual class time, Monday to Friday.";
       return;
     }
     scheduleEmpty.style.display = 'none';
+    ttLayout.hidden = false;
 
-    const lastShown = shownDates[shownDates.length - 1];
-    scheduleSubtext.textContent = `${upcomingCount} upcoming class${upcomingCount === 1 ? '' : 'es'}` +
-      (filterId ? ` for ${visibleStudents[0]?.name || 'this student'}` : ` for ${visibleStudents.length} student${visibleStudents.length === 1 ? '' : 's'}`) +
-      ` · until ${formatDisplayDate(lastShown)}`;
+    // Group students who share a start time into one block
+    const groups = new Map();
+    active.forEach(st => {
+      const start = toMinutes(st.class_time);
+      if (!groups.has(start)) groups.set(start, []);
+      groups.get(start).push(st);
+    });
+    const blocks = [...groups.entries()]
+      .map(([start, sts]) => ({ start, end: start + length, students: sts.sort((a, b) => a.name.localeCompare(b.name)) }))
+      .sort((a, b) => a.start - b.start);
 
-    const thisWeek = mondayOf(todayStr);
-    let html = '';
-    let emptyWeeks = 0;
-    for (let week = startWeek; week <= lastShown; week = offsetDays(week, 7)) {
-      // Weeks with nothing in them (e.g. between the last class and the exam) collapse into one line
-      const hasAnything = [0, 1, 2, 3, 4, 5, 6].some(i => byDate.has(offsetDays(week, i)));
-      if (!hasAnything) { emptyWeeks++; continue; }
-      if (!html) emptyWeeks = 0;
-      if (emptyWeeks && html) { // only between weeks, never as the first row
-        html +=`<div class="sched-gap">No classes for ${emptyWeeks} week${emptyWeeks === 1 ? '' : 's'}</div>`;
-        emptyWeeks = 0;
-      }
+    // Overlapping blocks (e.g. 10:00 and 10:30 with 1-hour classes) sit side by side
+    let laneEnds = [];
+    let cluster = [];
+    const flush = () => { cluster.forEach(b => { b.lanes = laneEnds.length; }); cluster = []; laneEnds = []; };
+    blocks.forEach(b => {
+      if (cluster.length && b.start >= Math.max(...laneEnds)) flush();
+      let lane = laneEnds.findIndex(end => end <= b.start);
+      if (lane === -1) { lane = laneEnds.length; laneEnds.push(b.end); } else { laneEnds[lane] = b.end; }
+      b.lane = lane;
+      cluster.push(b);
+    });
+    flush();
 
-      // Weekdays from today onward (days already gone this week are left out)
-      const days = [0, 1, 2, 3, 4].map(i => offsetDays(week, i)).filter(d => d >= todayStr);
-      // Saturday/Sunday columns only appear when an extra weekend class (or exam) falls on them
-      [5, 6].forEach(i => { const d = offsetDays(week, i); if (byDate.has(d)) days.push(d); });
+    // Visible day: 7 AM – 9 PM, stretched to whole hours around any earlier/later class
+    const dayStart = Math.min(TT_DEFAULT_START, Math.floor(blocks[0].start / 60) * 60);
+    const dayEnd = Math.max(TT_DEFAULT_END, Math.ceil(Math.max(...blocks.map(b => b.end)) / 60) * 60);
 
-      const weekClassCount = days.reduce((n, d) => n + (byDate.get(d) || []).filter(x => x.type === 'class' && x.s.status !== 'Missed').length, 0);
-      const weekLabel = week === thisWeek ? 'This week' : week === offsetDays(thisWeek, 7) ? 'Next week' : `Week of ${formatDisplayDate(week)}`;
+    // Free gaps between dayStart and dayEnd
+    const free = [];
+    let cursor = dayStart;
+    blocks.forEach(b => {
+      if (b.start - cursor >= TT_MIN_FREE) free.push({ start: cursor, end: b.start });
+      cursor = Math.max(cursor, b.end);
+    });
+    if (dayEnd - cursor >= TT_MIN_FREE) free.push({ start: cursor, end: dayEnd });
+    state.timetableFree = free;
 
-      html += `<section class="sched-week">
-        <header class="sched-week-head"><h3>${weekLabel}</h3><span>${weekClassCount} class${weekClassCount === 1 ? '' : 'es'}</span></header>
-        <div class="sched-days" style="--days:${days.length}">`;
+    const px = (mins) => ((mins - dayStart) / 60) * TT_PX_PER_HOUR;
+    const height = px(dayEnd);
 
-      days.forEach(d => {
-        const items = (byDate.get(d) || []).slice().sort((a, b) => {
-          if (a.type !== b.type) return a.type === 'exam' ? 1 : -1;
-          const ta = a.type === 'class' ? a.st.class_time : '';
-          const tb = b.type === 'class' ? b.st.class_time : '';
-          return ta.localeCompare(tb) || (a.st.name || '').localeCompare(b.st.name || '');
-        });
-        const { weekday, date } = shortDay(d);
-        const cls = ['sched-day'];
-        if (d === todayStr) cls.push('is-today');
-        if (d < todayStr) cls.push('is-past');
-        if (!items.length) cls.push('is-empty');
-        if (isWeekendStr(d)) cls.push('is-weekend');
-
-        html += `<div class="${cls.join(' ')}">
-          <div class="sched-day-head"><span class="sd-weekday">${weekday}</span><span class="sd-date">${date}</span>${d === todayStr ? '<span class="sd-today">Today</span>' : ''}</div>
-          <div class="sched-day-items">`;
-
-        if (!items.length) html += '<span class="sched-none">No classes</span>';
-        items.forEach(it => {
-          if (it.type === 'exam') {
-            html += `<button type="button" class="sched-chip sc-exam" data-student-id="${it.st.id}" title="${escapeHtml(it.st.name)}'s exam">
-              <span class="chip-time">🎓 Exam</span><span class="chip-name">${escapeHtml(it.st.name)}</span></button>`;
-            return;
-          }
-          const s = it.s;
-          const isTodayOpen = s.status === 'Pending' && d === todayStr;
-          const stCls = s.status === 'Taken' ? 'sc-taken' : s.status === 'Missed' ? 'sc-missed' : isTodayOpen ? 'sc-today' : 'sc-pending';
-          const extra = [stCls];
-          if (s.is_weekend) extra.push('sc-weekend');
-          if (state.highlightStudentId && String(s.student_id) === String(state.highlightStudentId)) extra.push('is-new');
-          const isLast = lastClassId.get(s.student_id) === s.id;
-          const meta = s.status === 'Missed' ? 'Missed'
-            : `#${classNo.get(s.id)}/${it.st.max_sessions || 20}${s.is_weekend ? ' · extra' : ''}${isLast ? ' 🏁' : ''}`;
-          html += `<button type="button" class="sched-chip ${extra.join(' ')}" data-student-id="${s.student_id}"
-              title="${escapeHtml(it.st.name)} · ${escapeHtml(formatDisplayDate(d))} · ${escapeHtml(formatTimeDisplay(it.st.class_time))}${isLast ? ' · last class' : ''}">
-            <span class="chip-time">${escapeHtml(formatTimeDisplay(it.st.class_time))}</span>
-            <span class="chip-name">${escapeHtml(it.st.name)}</span>
-            <span class="chip-meta">${meta}</span>
-          </button>`;
-        });
-        html += '</div></div>';
-      });
-      html += '</div></section>';
+    // Hour labels
+    let hoursHtml = '';
+    for (let m = dayStart; m <= dayEnd; m += 60) {
+      hoursHtml += `<span class="tt-hour" style="top:${px(m)}px">${minutesToLabel(m).replace(':00', '')}</span>`;
     }
-    scheduleWeeks.innerHTML = html;
 
-    scheduleWeeks.querySelectorAll('.sched-chip').forEach(chip => {
-      chip.addEventListener('click', () => switchView('profile', Number(chip.dataset.studentId)));
+    // One day column (identical Mon–Fri, since class times repeat every weekday)
+    const freeHtml = free.map(f => `
+      <div class="tt-free" style="top:${px(f.start)}px;height:${px(f.end) - px(f.start)}px" title="Free ${minutesToLabel(f.start)} – ${minutesToLabel(f.end)}">
+        <span>Free · ${rangeLabel(f.start, f.end)}</span>
+      </div>`).join('');
+    const blocksHtml = blocks.map(b => {
+      const names = b.students.map(s => escapeHtml(s.name)).join(', ');
+      // Each student with their expected completion date (last class that will happen)
+      const people = b.students.map(s => `<span class="tt-person"><b>${escapeHtml(s.name)}</b>${s.expected_end_date ? `<span class="tt-end" title="Expected end">ends ${escapeHtml(shortDate(s.expected_end_date))}</span>` : ''}</span>`).join('');
+      const peopleTitle = b.students.map(s => s.name + (s.expected_end_date ? ` (ends ${formatDisplayDate(s.expected_end_date)})` : '')).join(', ');
+      const isNew = state.highlightStudentId && b.students.some(s => String(s.id) === String(state.highlightStudentId));
+      const width = 100 / b.lanes;
+      return `
+        <button type="button" class="tt-block${isNew ? ' is-new' : ''}" data-ids="${b.students.map(s => s.id).join(',')}"
+          style="top:${px(b.start)}px;height:${px(b.end) - px(b.start)}px;left:calc(${b.lane * width}% + 2px);width:calc(${width}% - 4px)"
+          title="${rangeLabel(b.start, b.end)}: ${escapeHtml(peopleTitle)}">
+          <span class="tt-block-time">${rangeLabel(b.start, b.end)}</span>
+          <span class="tt-block-names">${people}</span>
+        </button>`;
+    }).join('');
+
+    const columns = TT_DAYS.map((d, i) => `
+      <div class="tt-col${i > 0 ? ' tt-col-extra' : ''}">
+        <div class="tt-col-head"><span class="tt-day-short">${d}</span><span class="tt-day-all">Every weekday (Mon – Fri)</span></div>
+        <div class="tt-col-body" style="height:${height}px">${freeHtml}${blocksHtml}</div>
+      </div>`).join('');
+
+    ttBoard.innerHTML = `
+      <div class="tt-hours"><div class="tt-col-head">&nbsp;</div><div class="tt-hours-body" style="height:${height}px">${hoursHtml}</div></div>
+      ${columns}`;
+
+    ttBoard.querySelectorAll('.tt-block').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ids = btn.dataset.ids.split(',');
+        if (ids.length === 1) switchView('profile', Number(ids[0]));
+        else switchView('students'); // several students share this time: show them in the table
+      });
     });
 
-    // Just-added student: briefly highlight their classes and scroll to the first one
+    // Side lists
+    ttFree.innerHTML = free.length
+      ? free.map(f => `<li><span class="tt-li-time">${minutesToLabel(f.start)} – ${minutesToLabel(f.end)}</span><span class="tt-li-meta">${durationLabel(f.end - f.start)}</span></li>`).join('')
+      : '<li class="tt-li-empty">No free gaps of 30 minutes or more.</li>';
+    ttFreeSub.textContent = `Monday to Friday, ${minutesToLabel(dayStart)} – ${minutesToLabel(dayEnd)}, with ${durationLabel(length)} classes`;
+    ttClasses.innerHTML = blocks.map(b => `
+      <li><span class="tt-li-time">${rangeLabel(b.start, b.end)}</span><span class="tt-li-names">${b.students.map(s => `<span class="tt-li-person">${escapeHtml(s.name)}${s.expected_end_date ? `<small>ends ${escapeHtml(shortDate(s.expected_end_date))}</small>` : ''}</span>`).join('')}</span></li>`).join('');
+
+    scheduleSubtext.textContent = `${active.length} student${active.length === 1 ? '' : 's'} · ${blocks.length} class time${blocks.length === 1 ? '' : 's'} · ${free.length} free slot${free.length === 1 ? '' : 's'} every weekday`;
+
     if (state.highlightStudentId) {
       state.highlightStudentId = null;
-      const first = scheduleWeeks.querySelector('.is-new');
+      const first = ttBoard.querySelector('.tt-block.is-new');
       if (first) setTimeout(() => first.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
-      setTimeout(() => scheduleWeeks.querySelectorAll('.is-new').forEach(c => c.classList.remove('is-new')), 6000);
+      setTimeout(() => ttBoard.querySelectorAll('.is-new').forEach(el => el.classList.remove('is-new')), 6000);
     }
   }
 
-  scheduleFilter.addEventListener('change', renderSchedule);
+  ttLength.addEventListener('change', () => {
+    try { localStorage.setItem('tt_class_length', ttLength.value); } catch { /* ignore */ }
+    renderTimetable();
+  });
+
+  // Copy the free times as a short message the teacher can paste to a student
+  ttCopyFree.addEventListener('click', async () => {
+    const free = state.timetableFree || [];
+    const text = free.length
+      ? `My free times (Monday to Friday): ${free.map(f => `${minutesToLabel(f.start)} – ${minutesToLabel(f.end)}`).join(', ')}.`
+      : 'I have no free time on weekdays right now.';
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('Free times copied. Paste them in a message to the student.', 'success');
+    } catch {
+      showToast(text, 'info'); // clipboard blocked: show the text so it can be copied by hand
+    }
+  });
 
   // ================= View 2: Students Directory =================
   async function loadStudents() {
@@ -1431,7 +1441,6 @@
 
       // Show the new student's classes straight away on the Schedule, highlighted
       state.highlightStudentId = data.student_id || null;
-      scheduleFilter.value = '';
       switchView('schedule');
 
     } catch (err) {
