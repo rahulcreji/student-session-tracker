@@ -220,6 +220,10 @@
               <span>Back to Students</span>
             </button>
             <div class="profile-actions">
+              <button id="btnOpenEditStudent" class="btn btn-secondary" title="Change name, class time or exam date">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                <span>Edit</span>
+              </button>
               <button id="btnOpenWeekendModal" class="btn btn-secondary">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
                 <span>+ Add Weekend Class</span>
@@ -413,8 +417,13 @@
 
         <div class="form-row">
           <div class="form-group">
-            <label for="inputClassTime">Class Time <span class="required">*</span></label>
-            <input type="time" id="inputClassTime" required value="10:00">
+            <label for="inputClassHour">Class Time <span class="required">*</span></label>
+            <div class="time-picker">
+              <select id="inputClassHour" aria-label="Hour"></select>
+              <span class="time-sep">:</span>
+              <select id="inputClassMinute" aria-label="Minutes"></select>
+              <select id="inputClassAmPm" aria-label="AM or PM"><option value="AM">AM</option><option value="PM">PM</option></select>
+            </div>
             <span class="field-hint">Their usual time, used for every class</span>
           </div>
 
@@ -440,6 +449,50 @@
     </div>
   </div>
 
+
+  <!-- ================= MODAL: EDIT STUDENT ================= -->
+  <div id="modalEditStudent" class="modal-backdrop" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div>
+          <h3>Edit Student</h3>
+          <p class="modal-subtext">Class time changes apply to all their classes</p>
+        </div>
+        <button class="modal-close" id="btnCloseEditStudent" aria-label="Close">&times;</button>
+      </div>
+      <form id="formEditStudent" class="modal-body">
+        <div class="form-group">
+          <label for="editStudentName">Student Name <span class="required">*</span></label>
+          <input type="text" id="editStudentName" required autocomplete="off">
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="editClassHour">Class Time <span class="required">*</span></label>
+            <div class="time-picker">
+              <select id="editClassHour" aria-label="Hour"></select>
+              <span class="time-sep">:</span>
+              <select id="editClassMinute" aria-label="Minutes"></select>
+              <select id="editClassAmPm" aria-label="AM or PM"><option value="AM">AM</option><option value="PM">PM</option></select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="editExamDate">Exam Date <span class="optional">(optional)</span></label>
+            <input type="date" id="editExamDate">
+            <span class="field-hint">Clear it if there is no exam</span>
+          </div>
+        </div>
+
+        <div id="formEditError" class="alert-box alert-error" style="display: none;"></div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" id="btnCancelEditStudent">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btnSubmitEditStudent">Save Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <!-- ================= MODAL: ADD WEEKEND CLASS ================= -->
   <div id="modalWeekend" class="modal-backdrop" style="display: none;">

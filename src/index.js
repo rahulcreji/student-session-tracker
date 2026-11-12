@@ -21,7 +21,7 @@ const routes = [
   [/^\/api\/health$/, { GET: health.onRequestGet }],
   [/^\/api\/dashboard$/, { GET: dashboard.onRequestGet }],
   [/^\/api\/students$/, { GET: students.onRequestGet, POST: students.onRequestPost }],
-  [/^\/api\/students\/(?<id>\d+)$/, { GET: studentById.onRequestGet, DELETE: studentById.onRequestDelete }],
+  [/^\/api\/students\/(?<id>\d+)$/, { GET: studentById.onRequestGet, PATCH: studentById.onRequestPatch, DELETE: studentById.onRequestDelete }],
   [/^\/api\/schedule$/, { GET: schedule.onRequestGet }],
   [/^\/api\/sessions\/weekend$/, { POST: sessionWeekend.onRequestPost }],
   [/^\/api\/sessions\/close-days$/, { POST: sessionsCloseDays.onRequestPost }],

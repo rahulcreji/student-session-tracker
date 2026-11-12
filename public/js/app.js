@@ -248,6 +248,7 @@
     if (!res.ok || data.success === false) {
       const err = new Error(data.error || `Request failed (HTTP ${res.status}).`);
       err.status = res.status;
+      err.data = data; // e.g. needs_confirmation details from the server
       throw err;
     }
     return data;
@@ -1245,6 +1246,7 @@
     const today = getTodayLocalDateStr();
     document.getElementById('inputStartDate').value = today;
     document.getElementById('inputNextClassDate').value = comingMonday(today);
+    setTimePicker('inputClass', '10:00');
     document.getElementById('inputExamDate').value = ''; // optional: most students may not have one yet
     document.getElementById('inputFinishedCount').value = 1;
     applyStudentMode();
@@ -1374,7 +1376,7 @@
     };
 
     const name = document.getElementById('inputStudentName').value.trim();
-    const classTime = document.getElementById('inputClassTime').value;
+    const classTime = readTimePicker('inputClass');
     const examDate = document.getElementById('inputExamDate').value;
     const started = isAlreadyStartedMode();
 
@@ -1566,12 +1568,128 @@
   window.addEventListener('click', (e) => {
     if (e.target === modalAddStudent) closeAddStudentModal();
     if (e.target === modalWeekend) closeWeekendModal();
+    if (e.target === modalEditStudent) closeEditStudentModal();
   });
 
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closeAddStudentModal();
       closeWeekendModal();
+      closeEditStudentModal();
+    }
+  });
+
+  // ================= Time picker (hour : minute AM/PM) =================
+  // Explicit AM/PM dropdowns, so the time is clear on every device
+  // (a plain time box may show 24-hour time depending on the computer's settings).
+  // Values are stored as 24-hour "HH:MM".
+  function fillTimePicker(prefix) {
+    const hour = document.getElementById(prefix + 'Hour');
+    const minute = document.getElementById(prefix + 'Minute');
+    hour.innerHTML = Array.from({ length: 12 }, (_, i) => `<option value="${i + 1}">${i + 1}</option>`).join('');
+    minute.innerHTML = Array.from({ length: 12 }, (_, i) => {
+      const m = String(i * 5).padStart(2, '0');
+      return `<option value="${m}">${m}</option>`;
+    }).join('');
+  }
+
+  function setTimePicker(prefix, hhmm) {
+    const [h24, mm] = (hhmm || '10:00').split(':').map(Number);
+    const hour = document.getElementById(prefix + 'Hour');
+    const minute = document.getElementById(prefix + 'Minute');
+    hour.value = String(h24 % 12 || 12);
+    const m = String(mm || 0).padStart(2, '0');
+    if (![...minute.options].some(o => o.value === m)) {
+      minute.insertAdjacentHTML('beforeend', `<option value="${m}">${m}</option>`); // e.g. an older 10:07
+    }
+    minute.value = m;
+    document.getElementById(prefix + 'AmPm').value = h24 >= 12 ? 'PM' : 'AM';
+  }
+
+  function readTimePicker(prefix) {
+    const h12 = parseInt(document.getElementById(prefix + 'Hour').value, 10);
+    const m = document.getElementById(prefix + 'Minute').value;
+    const pm = document.getElementById(prefix + 'AmPm').value === 'PM';
+    const h24 = (h12 % 12) + (pm ? 12 : 0);
+    return `${String(h24).padStart(2, '0')}:${m}`;
+  }
+
+  fillTimePicker('inputClass');
+  fillTimePicker('editClass');
+  setTimePicker('inputClass', '10:00');
+
+  // ================= Edit Student =================
+  const modalEditStudent = document.getElementById('modalEditStudent');
+  const formEditStudent = document.getElementById('formEditStudent');
+  const formEditError = document.getElementById('formEditError');
+
+  function openEditStudentModal() {
+    if (!state.currentStudentData) return;
+    const st = state.currentStudentData.student;
+    formEditError.style.display = 'none';
+    document.getElementById('editStudentName').value = st.name;
+    setTimePicker('editClass', st.class_time);
+    document.getElementById('editExamDate').value = st.exam_date || '';
+    modalEditStudent.style.display = 'flex';
+    document.getElementById('editStudentName').focus();
+  }
+
+  function closeEditStudentModal() {
+    modalEditStudent.style.display = 'none';
+  }
+
+  document.getElementById('btnOpenEditStudent').addEventListener('click', openEditStudentModal);
+  document.getElementById('btnCloseEditStudent').addEventListener('click', closeEditStudentModal);
+  document.getElementById('btnCancelEditStudent').addEventListener('click', closeEditStudentModal);
+
+  formEditStudent.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    formEditError.style.display = 'none';
+    const st = state.currentStudentData && state.currentStudentData.student;
+    if (!st) return;
+
+    const payload = {
+      name: document.getElementById('editStudentName').value.trim(),
+      class_time: readTimePicker('editClass'),
+      exam_date: document.getElementById('editExamDate').value || ''
+    };
+    if (!payload.name) {
+      formEditError.textContent = 'Please enter the student name.';
+      formEditError.style.display = 'block';
+      return;
+    }
+
+    const save = (extra = {}) => withButtonsDisabled(formEditStudent, () =>
+      apiRequest(`/api/students/${st.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, ...extra })
+      }));
+
+    try {
+      let data;
+      try {
+        data = await save();
+      } catch (err) {
+        // New exam date is before some upcoming classes: ask before removing them
+        if (err.status === 409 && err.data && err.data.needs_confirmation) {
+          const n = err.data.affected_count;
+          const ok = confirm(
+            `${n} upcoming class${n === 1 ? '' : 'es'} fall on or after the new exam date (${formatDisplayDate(payload.exam_date)}).\n\n` +
+            `Save anyway and remove ${n === 1 ? 'that class' : 'those classes'}?`
+          );
+          if (!ok) return;
+          data = await save({ remove_after_exam: true });
+        } else {
+          throw err;
+        }
+      }
+      closeEditStudentModal();
+      showToast(data.message || 'Saved.', 'success');
+      loadStudentProfile(st.id);
+    } catch (err) {
+      formEditError.textContent = err.message;
+      formEditError.style.display = 'block';
     }
   });
 
