@@ -2052,3 +2052,76 @@ button.cal-day:focus-visible {
   font-weight: 700;
   color: var(--gray-500);
 }
+
+/* ================= Students table ================= */
+.st-table-wrap {
+  overflow-x: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.st-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+  min-width: 720px;
+}
+
+.st-table th {
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--gray-500);
+  background: var(--gray-50);
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.st-table td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.st-table tbody tr:last-child td { border-bottom: none; }
+
+.st-row { cursor: pointer; transition: background 0.12s ease; }
+.st-row:hover { background: var(--primary-light); }
+.st-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+
+.st-name { font-weight: 700; color: var(--gray-900); }
+.st-sub { display: block; font-size: 0.75rem; font-weight: 400; color: var(--gray-500); }
+.st-time { color: var(--primary); font-weight: 600; }
+.st-num { text-align: right; font-variant-numeric: tabular-nums; }
+.st-table th.st-num { text-align: right; }
+.st-taken { color: var(--success); font-weight: 700; }
+.st-missed { color: var(--danger); font-weight: 700; }
+.st-end { font-weight: 700; color: var(--gray-900); }
+
+.st-pill {
+  display: inline-block;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--radius-full);
+  background: var(--primary-light);
+  color: var(--primary);
+  margin-left: 0.25rem;
+}
+.st-pill-soon { background: var(--warning-light); color: #92400e; }
+.st-pill-done { background: var(--success-light); color: #047857; }
+
+.st-note {
+  font-size: 0.8125rem;
+  color: var(--gray-500);
+  margin-top: 0.625rem;
+}
+
+/* The table replaces the old card grid */
+#studentsGrid.students-grid { display: block; }

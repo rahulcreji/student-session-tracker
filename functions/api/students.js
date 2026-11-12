@@ -23,7 +23,7 @@ export async function onRequestGet(context) {
         COALESCE(SUM(CASE WHEN ses.status = 'Missed' THEN 1 ELSE 0 END), 0) AS missed_count,
         COALESCE(SUM(CASE WHEN ses.status = 'Pending' THEN 1 ELSE 0 END), 0) AS pending_count,
         COUNT(ses.id) AS total_sessions,
-        MAX(ses.scheduled_date) AS expected_end_date,
+        MAX(CASE WHEN ses.status != 'Missed' THEN ses.scheduled_date END) AS expected_end_date, -- last class that will happen
         MIN(CASE WHEN ses.status = 'Pending' THEN ses.scheduled_date ELSE NULL END) AS next_pending_date
       FROM students s
       LEFT JOIN sessions ses ON s.id = ses.student_id

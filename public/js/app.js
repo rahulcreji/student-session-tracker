@@ -817,6 +817,9 @@
     }
   }
 
+  // Students as a table, earliest expected end first (students with no classes go last).
+  // Expected end moves by itself: a missed class pushes it later; a weekend class or
+  // more classes attended bring it earlier.
   function renderStudentsList(students) {
     studentsGrid.innerHTML = '';
 
@@ -824,51 +827,55 @@
       studentsEmpty.style.display = 'flex';
       return;
     }
-
     studentsEmpty.style.display = 'none';
 
-    students.forEach(student => {
-      const card = document.createElement('div');
-      card.className = 'directory-card';
+    const sorted = students.slice().sort((a, b) =>
+      (a.expected_end_date || '9999-12-31').localeCompare(b.expected_end_date || '9999-12-31') ||
+      a.name.localeCompare(b.name));
+    const todayStr = getTodayLocalDateStr();
 
-      const completed = student.completed_count || 0;
-      const missed = student.missed_count || 0;
-      const pending = student.pending_count || 0;
-      const formattedTime = formatTimeDisplay(student.class_time);
+    const rows = sorted.map(st => {
+      const done = st.completed_count || 0;
+      const missed = st.missed_count || 0;
+      const left = st.pending_count || 0;
+      const end = st.expected_end_date;
+      const finished = left === 0;
+      const endsSoon = end && !finished && daysFromToday(end) <= 7;
+      return `
+        <tr class="st-row" data-id="${st.id}" tabindex="0" title="Open ${escapeHtml(st.name)}">
+          <td class="st-name">${escapeHtml(st.name)}${st.exam_date ? `<span class="st-sub">Exam ${escapeHtml(formatDisplayDate(st.exam_date))}</span>` : ''}</td>
+          <td class="st-time">${escapeHtml(formatTimeDisplay(st.class_time))}</td>
+          <td class="st-num st-taken">${done}</td>
+          <td class="st-num st-missed">${missed}</td>
+          <td class="st-num">${left}</td>
+          <td class="st-date">${st.next_pending_date ? escapeHtml(formatDisplayDate(st.next_pending_date)) + (st.next_pending_date === todayStr ? ' <span class="st-pill">today</span>' : '') : '—'}</td>
+          <td class="st-date st-end">${end ? escapeHtml(formatDisplayDate(end)) : '—'}${finished ? ' <span class="st-pill st-pill-done">finished</span>' : endsSoon ? ' <span class="st-pill st-pill-soon">this week</span>' : ''}</td>
+        </tr>`;
+    }).join('');
 
-      card.innerHTML = `
-        <div class="directory-header-row">
-          <div class="directory-name">${escapeHtml(student.name)}</div>
-          <div class="directory-time">⏰ ${escapeHtml(formattedTime)}</div>
-        </div>
+    studentsGrid.innerHTML = `
+      <div class="st-table-wrap">
+        <table class="st-table">
+          <thead>
+            <tr>
+              <th scope="col">Student</th>
+              <th scope="col">Class time</th>
+              <th scope="col" class="st-num">Taken</th>
+              <th scope="col" class="st-num">Missed</th>
+              <th scope="col" class="st-num">Left</th>
+              <th scope="col">Next class</th>
+              <th scope="col">Expected end ↑</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <p class="st-note">Sorted by expected end, earliest first. Click a student to open, edit or delete them.</p>`;
 
-        <div class="directory-stats-row">
-          <span>Taken: <strong style="color: var(--success);">${completed}</strong></span>
-          <span>Missed: <strong style="color: var(--danger);">${missed}</strong></span>
-          <span>Left: <strong style="color: var(--primary);">${pending}</strong></span>
-        </div>
-
-        <div class="card-meta">
-          ${student.exam_date ? `<div class="card-meta-row">
-            <span>Exam Date:</span>
-            <strong>${formatDisplayDate(student.exam_date)}</strong>
-          </div>` : ''}
-          <div class="card-meta-row">
-            <span>Next Class:</span>
-            <span>${student.next_pending_date ? formatDisplayDate(student.next_pending_date) : '—'}</span>
-          </div>
-          <div class="card-meta-row">
-            <span>Expected End:</span>
-            <span>${student.expected_end_date ? formatDisplayDate(student.expected_end_date) : '—'}</span>
-          </div>
-        </div>
-      `;
-
-      card.addEventListener('click', () => {
-        switchView('profile', student.id);
-      });
-
-      studentsGrid.appendChild(card);
+    studentsGrid.querySelectorAll('.st-row').forEach(tr => {
+      const open = () => switchView('profile', Number(tr.dataset.id));
+      tr.addEventListener('click', open);
+      tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
     });
   }
 

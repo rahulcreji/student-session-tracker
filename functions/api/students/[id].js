@@ -40,7 +40,7 @@ export async function onRequestGet(context) {
     const pendingCount = sessions.filter(s => s.status === 'Pending').length;
 
     const pendingDates = sessions.filter(s => s.status === 'Pending').map(s => s.scheduled_date);
-    const allDates = sessions.map(s => s.scheduled_date);
+    const allDates = sessions.filter(s => s.status !== 'Missed').map(s => s.scheduled_date); // missed classes don't end a course
 
     const expectedEndDate = allDates.length > 0 ? allDates[allDates.length - 1] : null;
     const nextPendingDate = pendingDates.length > 0 ? pendingDates[0] : null;
