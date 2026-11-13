@@ -2507,3 +2507,42 @@ button.cal-day:focus-visible {
   .tl-tick:nth-child(even) { display: none; } /* fewer labels on narrow screens */
 }
 .tt-board { display: block; max-width: none; }
+
+/* ================= Notes (one shared note for the whole website) ================= */
+.notes-header { gap: 1rem; }
+.notes-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.notes-text {
+  width: 100%;
+  min-height: 55vh;
+  resize: vertical;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 0.875rem 1rem;
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--gray-900);
+  background: var(--bg-app);
+}
+.notes-text:focus { outline: 2px solid var(--primary-border); border-color: var(--primary); background: #fff; }
+.notes-text:disabled { opacity: 0.6; }
+.notes-status { font-size: 0.8rem; color: var(--gray-500); }
+.notes-status.is-dirty { color: var(--warning-hover); font-weight: 600; }
+@media (max-width: 767px) {
+  .notes-text { min-height: 50vh; }
+  .mobile-nav-bar { padding-left: 0.25rem; padding-right: 0.25rem; }
+  .mobile-nav-item { min-width: 52px; padding: 0.25rem 0.4rem; }
+}
+/* Phones use the bottom bar, so the top tabs (now 4) are hidden there to avoid sideways scrolling */
+@media (max-width: 767px) {
+  .nav-tabs { display: none; }
+}

@@ -24,3 +24,10 @@ CREATE INDEX IF NOT EXISTS idx_sessions_student_id ON sessions(student_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(scheduled_date);
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 
+
+-- One shared note for the whole website (also created automatically by /api/notes)
+CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    body TEXT NOT NULL DEFAULT '',
+    updated_at TEXT
+);

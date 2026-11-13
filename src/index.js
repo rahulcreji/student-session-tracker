@@ -14,11 +14,13 @@ import * as sessionById from '../functions/api/sessions/[id].js';
 import * as sessionWeekend from '../functions/api/sessions/weekend.js';
 import * as sessionsCloseDays from '../functions/api/sessions/close-days.js';
 import * as schedule from '../functions/api/schedule.js';
+import * as notes from '../functions/api/notes.js';
 import { json } from '../functions/api/_utils.js';
 
 // [pattern, { METHOD: handler }]
 const routes = [
   [/^\/api\/health$/, { GET: health.onRequestGet }],
+  [/^\/api\/notes$/, { GET: notes.onRequestGet, PUT: notes.onRequestPut }],
   [/^\/api\/dashboard$/, { GET: dashboard.onRequestGet }],
   [/^\/api\/students$/, { GET: students.onRequestGet, POST: students.onRequestPost }],
   [/^\/api\/students\/(?<id>\d+)$/, { GET: studentById.onRequestGet, PATCH: studentById.onRequestPatch, DELETE: studentById.onRequestDelete }],

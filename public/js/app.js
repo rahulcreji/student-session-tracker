@@ -27,7 +27,8 @@
     dashboard: document.getElementById('viewDashboard'),
     schedule: document.getElementById('viewSchedule'),
     students: document.getElementById('viewStudents'),
-    profile: document.getElementById('viewProfile')
+    profile: document.getElementById('viewProfile'),
+    notes: document.getElementById('viewNotes')
   };
 
   // Nav buttons
@@ -37,6 +38,11 @@
   const mobTabSchedule = document.getElementById('mobTabSchedule');
   const mobTabDashboard = document.getElementById('mobTabDashboard');
   const mobTabStudents = document.getElementById('mobTabStudents');
+  const tabNotes = document.getElementById('tabNotes');
+  const mobTabNotes = document.getElementById('mobTabNotes');
+  const notesText = document.getElementById('notesText');
+  const notesStatus = document.getElementById('notesStatus');
+  const btnSaveNotes = document.getElementById('btnSaveNotes');
   const todayPendingCount = document.getElementById('todayPendingCount');
 
   // Modals & triggers
@@ -283,6 +289,10 @@
 
   // ================= Routing & View Switching =================
   function switchView(viewName, studentId = null) {
+    if (state.currentView === 'notes' && viewName !== 'notes' && notesDirty()
+      && !confirm('Your notes have unsaved changes. Leave without saving?')) {
+      return;
+    }
     state.currentView = viewName;
 
     Object.keys(views).forEach(key => {
@@ -299,6 +309,8 @@
     mobTabDashboard.classList.toggle('active', viewName === 'dashboard');
     mobTabSchedule.classList.toggle('active', viewName === 'schedule');
     mobTabStudents.classList.toggle('active', inStudents);
+    tabNotes.classList.toggle('active', viewName === 'notes');
+    mobTabNotes.classList.toggle('active', viewName === 'notes');
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
@@ -308,6 +320,8 @@
       loadSchedule();
     } else if (viewName === 'students') {
       loadStudents();
+    } else if (viewName === 'notes') {
+      loadNotes();
     } else if (viewName === 'profile') {
       if (studentId) {
         state.currentStudentId = studentId;
@@ -1531,7 +1545,84 @@
     }
   });
 
+  // ================= View: Notes (one shared note for the whole website) =================
+  let notesSaved = null; // text as last loaded/saved; null = not loaded yet
+  const notesDirty = () => notesSaved !== null && notesText.value !== notesSaved;
+
+  function formatSavedAt(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d)) return '';
+    return d.toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  function refreshNotesStatus(updatedAt) {
+    if (notesDirty()) {
+      notesStatus.textContent = 'Unsaved changes. Press Save (or Ctrl + S).';
+      notesStatus.classList.add('is-dirty');
+    } else {
+      notesStatus.classList.remove('is-dirty');
+      if (updatedAt !== undefined) {
+        notesStatus.textContent = updatedAt ? `Saved · last updated ${formatSavedAt(updatedAt)}` : 'No notes yet.';
+      } else if (notesStatus.dataset.saved) {
+        notesStatus.textContent = notesStatus.dataset.saved;
+      }
+    }
+    if (updatedAt !== undefined) notesStatus.dataset.saved = notesStatus.textContent;
+    btnSaveNotes.disabled = !notesDirty();
+  }
+
+  async function loadNotes() {
+    if (notesDirty()) return; // keep unsaved typing
+    notesText.disabled = true;
+    btnSaveNotes.disabled = true;
+    notesStatus.classList.remove('is-dirty');
+    notesStatus.textContent = 'Loading…';
+    try {
+      const data = await apiRequest('/api/notes');
+      notesText.value = data.body || '';
+      notesSaved = notesText.value;
+      notesText.disabled = false;
+      refreshNotesStatus(data.updated_at);
+    } catch (err) {
+      notesStatus.textContent = `Could not load notes: ${err.message}`;
+    }
+  }
+
+  async function saveNotes() {
+    if (!notesDirty()) return;
+    const text = notesText.value;
+    btnSaveNotes.disabled = true;
+    btnSaveNotes.textContent = 'Saving…';
+    try {
+      const data = await apiRequest('/api/notes', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body: text })
+      });
+      notesSaved = text;
+      refreshNotesStatus(data.updated_at);
+      showToast('Notes saved.', 'success');
+    } catch (err) {
+      showToast(`Could not save notes: ${err.message}`, 'error');
+    } finally {
+      btnSaveNotes.textContent = 'Save';
+      btnSaveNotes.disabled = !notesDirty();
+    }
+  }
+
+  notesText.addEventListener('input', () => refreshNotesStatus());
+  btnSaveNotes.addEventListener('click', saveNotes);
+  notesText.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveNotes(); }
+  });
+  window.addEventListener('beforeunload', (e) => {
+    if (notesDirty()) { e.preventDefault(); e.returnValue = ''; }
+  });
+
   // ================= Event Listeners: Navigation =================
+  tabNotes.addEventListener('click', () => switchView('notes'));
+  mobTabNotes.addEventListener('click', () => switchView('notes'));
   tabDashboard.addEventListener('click', () => switchView('dashboard'));
   tabStudents.addEventListener('click', () => switchView('students'));
   tabSchedule.addEventListener('click', () => switchView('schedule'));
