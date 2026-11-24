@@ -1272,6 +1272,7 @@
     const today = getTodayLocalDateStr();
     document.getElementById('inputStartDate').value = today;
     document.getElementById('inputNextClassDate').value = comingMonday(today);
+    document.getElementById('inputLastClassDate').value = lastWeekdayBefore(today);
     setTimePicker('inputClass', '10:00');
     document.getElementById('inputExamDate').value = ''; // optional: most students may not have one yet
     document.getElementById('inputFinishedCount').value = 1;
@@ -1287,8 +1288,33 @@
     return offsetDays(dateStr, (8 - dow) % 7);
   }
 
+  // The last Monday–Friday before the given date
+  function lastWeekdayBefore(dateStr) {
+    let d = offsetDays(dateStr, -1);
+    while (isWeekendStr(d)) d = offsetDays(d, -1);
+    return d;
+  }
+
   function isAlreadyStartedMode() {
     return document.getElementById('modeStarted').checked;
+  }
+
+  // "Already started" with every class done: an old student whose course is complete
+  function isCompletedEntry() {
+    if (!isAlreadyStartedMode()) return false;
+    const total = readTotalSessions();
+    const done = parseInt(document.getElementById('inputFinishedCount').value, 10);
+    return !isNaN(total) && done === total;
+  }
+
+  // Next Class Date for students still studying; Last Class Date for completed ones
+  function syncCompletedFields() {
+    const started = isAlreadyStartedMode();
+    const completed = isCompletedEntry();
+    document.getElementById('groupNextClass').hidden = completed;
+    document.getElementById('groupLastClass').hidden = !completed;
+    document.getElementById('inputNextClassDate').required = started && !completed;
+    document.getElementById('inputLastClassDate').required = started && completed;
   }
 
   // Total classes chosen in the Add Student form (1–200), or NaN if not valid
@@ -1301,11 +1327,12 @@
   // Keep the "Classes Already Finished" limits in step with the total
   function syncFinishedLimits() {
     const total = readTotalSessions();
-    const max = isNaN(total) ? 19 : Math.max(1, total - 1);
+    const max = isNaN(total) ? 20 : total;
     document.getElementById('inputFinishedCount').max = String(max);
-    document.getElementById('finishedHint').textContent = isNaN(total) || total < 2
+    document.getElementById('finishedHint').textContent = isNaN(total)
       ? 'How many classes are done'
-      : `How many of the ${total} classes are done (1–${total - 1})`;
+      : `How many of the ${total} classes are done (1–${total}; ${total} = course finished)`;
+    syncCompletedFields();
   }
 
   // Shows the fields for "New student" or "Already started" and keeps `required` in sync
@@ -1314,9 +1341,8 @@
     document.getElementById('groupStartDate').hidden = started;
     document.getElementById('groupStarted').hidden = !started;
     document.getElementById('inputStartDate').required = !started;
-    document.getElementById('inputNextClassDate').required = started;
     document.getElementById('inputFinishedCount').required = started;
-    syncFinishedLimits();
+    syncFinishedLimits(); // also sets which class date (next / last) is required
     updateSchedulePreview();
   }
 
@@ -1352,15 +1378,23 @@
     if (isAlreadyStartedMode()) {
       const next = document.getElementById('inputNextClassDate').value;
       const done = parseInt(document.getElementById('inputFinishedCount').value, 10);
-      if (!next || !exam || isNaN(done)) { preview.style.display = 'none'; return; }
-      if (total < 2) {
-        show('error', 'With only 1 class in total, choose "New student".');
+      if (isNaN(done)) { preview.style.display = 'none'; return; }
+      if (done < 1 || done > total) {
+        show('error', `Enter how many classes are already done: a number from 1 to ${total}.`);
         return;
       }
-      if (done < 1 || done > total - 1) {
-        show('error', `Enter how many classes are already done: a number from 1 to ${total - 1}.`);
+      if (done === total) {
+        // Old student: the whole course is already finished
+        const lastClass = document.getElementById('inputLastClassDate').value;
+        if (!lastClass) { preview.style.display = 'none'; return; }
+        if (lastClass > todayStr) {
+          show('error', 'The last class date cannot be in the future.');
+          return;
+        }
+        show('info', `Course finished: all ${total} classes will be recorded as attended, ending on ${formatDisplayDate(isWeekendStr(lastClass) ? lastWeekdayBefore(lastClass) : lastClass)}. No upcoming classes, so this student won't appear on Today or Schedule. They will show in the Students table and Earnings.`);
         return;
       }
+      if (!next) { preview.style.display = 'none'; return; }
       const left = total - done;
       const dates = weekdaysFrom(next, exam, left);
       if (!dates.length) {
@@ -1406,9 +1440,12 @@
     }
   }
 
-  ['inputStartDate', 'inputExamDate', 'inputNextClassDate'].forEach(id =>
+  ['inputStartDate', 'inputExamDate', 'inputNextClassDate', 'inputLastClassDate'].forEach(id =>
     document.getElementById(id).addEventListener('change', updateSchedulePreview));
-  document.getElementById('inputFinishedCount').addEventListener('input', updateSchedulePreview);
+  document.getElementById('inputFinishedCount').addEventListener('input', () => {
+    syncCompletedFields();
+    updateSchedulePreview();
+  });
   document.getElementById('inputTotalSessions').addEventListener('input', () => {
     syncFinishedLimits();
     updateSchedulePreview();
@@ -1454,13 +1491,21 @@
 
     const payload = { name, class_time: classTime, exam_date: examDate, total_sessions: total };
     if (started) {
-      const nextClass = document.getElementById('inputNextClassDate').value;
       const done = parseInt(document.getElementById('inputFinishedCount').value, 10);
-      if (!nextClass) { showError('Please choose the date of the next class.'); return; }
-      if (total < 2) { showError('With only 1 class in total, choose "New student".'); return; }
-      if (isNaN(done) || done < 1 || done > total - 1) { showError(`Classes already finished must be a number from 1 to ${total - 1}.`); return; }
-      if (examDate && nextClass >= examDate) { showError('The next class must be before the exam date.'); return; }
-      payload.next_class_date = nextClass;
+      if (isNaN(done) || done < 1 || done > total) { showError(`Classes already finished must be a number from 1 to ${total}.`); return; }
+      if (done === total) {
+        // Completed (old) student: record all classes as attended, nothing upcoming
+        const lastClass = document.getElementById('inputLastClassDate').value;
+        if (!lastClass) { showError('Please choose the date of the last class.'); return; }
+        if (lastClass > getTodayLocalDateStr()) { showError('The last class date cannot be in the future.'); return; }
+        payload.last_class_date = lastClass;
+        payload.today = getTodayLocalDateStr();
+      } else {
+        const nextClass = document.getElementById('inputNextClassDate').value;
+        if (!nextClass) { showError('Please choose the date of the next class.'); return; }
+        if (examDate && nextClass >= examDate) { showError('The next class must be before the exam date.'); return; }
+        payload.next_class_date = nextClass;
+      }
       payload.classes_already_finished = done;
     } else {
       const startDate = document.getElementById('inputStartDate').value;
@@ -1490,9 +1535,14 @@
       closeAddStudentModal();
       showToast(data.message || `Student ${name} enrolled with initial schedule.`, 'success');
 
-      // Show the new student's classes straight away on the Schedule, highlighted
-      state.highlightStudentId = data.student_id || null;
-      switchView('schedule');
+      if (payload.last_class_date) {
+        // Finished student: nothing on the Schedule, so show them in the Students table
+        switchView('students');
+      } else {
+        // Show the new student's classes straight away on the Schedule, highlighted
+        state.highlightStudentId = data.student_id || null;
+        switchView('schedule');
+      }
 
     } catch (err) {
       submitBtn.disabled = false;

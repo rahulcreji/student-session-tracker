@@ -561,7 +561,7 @@
           </label>
           <label class="mode-option" for="modeStarted">
             <input type="radio" name="studentMode" id="modeStarted" value="started">
-            <span><strong>Already started</strong><small>Some classes are already done</small></span>
+            <span><strong>Already started</strong><small>Some or all classes are already done</small></span>
           </label>
         </fieldset>
 
@@ -579,10 +579,16 @@
             <input type="number" id="inputFinishedCount" min="1" max="19" value="1" inputmode="numeric">
             <span class="field-hint" id="finishedHint">How many of the 20 classes are done (1–19)</span>
           </div>
-          <div class="form-group">
+          <div class="form-group" id="groupNextClass">
             <label for="inputNextClassDate">Next Class Date <span class="required">*</span></label>
             <input type="date" id="inputNextClassDate">
             <span class="field-hint">The remaining classes continue Mon–Fri from here</span>
+          </div>
+          <!-- Shown when every class is already finished (an old / completed student) -->
+          <div class="form-group" id="groupLastClass" hidden>
+            <label for="inputLastClassDate">Last Class Date <span class="required">*</span></label>
+            <input type="date" id="inputLastClassDate">
+            <span class="field-hint">When the course finished. No upcoming classes are added.</span>
           </div>
         </div>
 

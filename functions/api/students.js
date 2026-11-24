@@ -1,5 +1,5 @@
 import { json, error, parseDate, formatDate, addDays, isWeekday } from './_utils.js';
-import { MAX_TOTAL_SESSIONS } from './_schedule.js';
+import { MAX_TOTAL_SESSIONS, validateClientToday } from './_schedule.js';
 
 /**
  * GET /api/students
@@ -105,7 +105,30 @@ export async function onRequestPost(context) {
     const classesFinished = Math.min(maxSessions, Math.max(0, isNaN(finishedRaw) ? 0 : finishedRaw));
 
     let startDateObj;
-    if (body.next_class_date) {
+    if (body.last_class_date) {
+      // Old / completed student: every class is already done. Record them all as attended
+      // on the weekdays up to the last class date; nothing upcoming is scheduled.
+      if (classesFinished !== maxSessions) {
+        return error('A last class date is only used when every class is finished.', 400);
+      }
+      let lastClass = parseDate(body.last_class_date);
+      if (!lastClass) {
+        return error('Valid last class date (YYYY-MM-DD) is required.', 400);
+      }
+      const limit = parseDate(validateClientToday(body.today)) || addDays(parseDate(formatDate(new Date())), 1);
+      if (lastClass.getTime() > limit.getTime()) {
+        return error('The last class date cannot be in the future.', 400);
+      }
+      while (!isWeekday(lastClass)) lastClass = addDays(lastClass, -1);
+      if (!beforeExam(lastClass)) {
+        return error('The last class must be before the exam date.', 400);
+      }
+      startDateObj = lastClass;
+      for (let done = 1; done < classesFinished; ) {
+        startDateObj = addDays(startDateObj, -1);
+        if (isWeekday(startDateObj)) done++;
+      }
+    } else if (body.next_class_date) {
       // "Already started" student: N classes are done and the rest continue from next_class_date.
       // Pick the start date so that exactly N weekdays fall before the next class; the loop below
       // then records those N as Taken and schedules the remaining ones from the next class onward.
@@ -187,9 +210,11 @@ export async function onRequestPost(context) {
     }
 
     const remaining = schedule.filter(s => s.status === 'Pending');
-    const summary = body.next_class_date && remaining.length
-      ? `${trimmedName} added: ${classesFinished} attended class(es) recorded, ${remaining.length} remaining from ${remaining[0].date} to ${remaining[remaining.length - 1].date}.`
-      : `${trimmedName} enrolled with ${schedule.length} session(s).`;
+    const summary = body.last_class_date
+      ? `${trimmedName} added as a finished student: all ${schedule.length} classes recorded as attended (last class ${schedule[schedule.length - 1].date}).`
+      : body.next_class_date && remaining.length
+        ? `${trimmedName} added: ${classesFinished} attended class(es) recorded, ${remaining.length} remaining from ${remaining[0].date} to ${remaining[remaining.length - 1].date}.`
+        : `${trimmedName} enrolled with ${schedule.length} session(s).`;
 
     return json({
       success: true,
