@@ -858,7 +858,8 @@
       const missed = st.missed_count || 0;
       const left = st.pending_count || 0;
       const end = st.expected_end_date;
-      const finished = left === 0;
+      const noDates = (st.total_sessions || 0) === 0; // added with "No dates yet"
+      const finished = left === 0 && !noDates;
       const endsSoon = end && !finished && daysFromToday(end) <= 7;
       return `
         <tr class="st-row" data-id="${st.id}" tabindex="0" title="Open ${escapeHtml(st.name)}">
@@ -868,7 +869,7 @@
           <td class="st-num st-missed">${missed}</td>
           <td class="st-num">${left}</td>
           <td class="st-date">${st.next_pending_date ? escapeHtml(formatDisplayDate(st.next_pending_date)) + (st.next_pending_date === todayStr ? ' <span class="st-pill">today</span>' : '') : '—'}</td>
-          <td class="st-date st-end">${end ? escapeHtml(formatDisplayDate(end)) : '—'}${finished ? ' <span class="st-pill st-pill-done">finished</span>' : endsSoon ? ' <span class="st-pill st-pill-soon">this week</span>' : ''}</td>
+          <td class="st-date st-end">${end ? escapeHtml(formatDisplayDate(end)) : '—'}${noDates ? ' <span class="st-pill st-pill-nodates">no dates yet</span>' : finished ? ' <span class="st-pill st-pill-done">finished</span>' : endsSoon ? ' <span class="st-pill st-pill-soon">this week</span>' : ''}</td>
         </tr>`;
     }).join('');
 
@@ -952,7 +953,9 @@
     profileName.textContent = student.name;
     profileAvatar.textContent = student.name.charAt(0).toUpperCase();
     profileTime.textContent = '⏰ ' + formatTimeDisplay(student.class_time);
-    profileStart.textContent = 'Starts: ' + formatDisplayDate(student.start_date);
+    profileStart.textContent = student.start_date
+      ? 'Starts: ' + formatDisplayDate(student.start_date)
+      : 'No class dates yet: use Edit to set the first class date';
     // Students without an exam date: hide the exam tags entirely
     profileExam.textContent = student.exam_date ? 'Exam: ' + formatDisplayDate(student.exam_date) : '';
     profileExam.hidden = !student.exam_date;
@@ -1336,11 +1339,16 @@
   }
 
   // Shows the fields for "New student" or "Already started" and keeps `required` in sync
+  function isNoDatesMode() {
+    return document.getElementById('modeNoDates').checked;
+  }
+
   function applyStudentMode() {
     const started = isAlreadyStartedMode();
-    document.getElementById('groupStartDate').hidden = started;
+    const noDates = isNoDatesMode();
+    document.getElementById('groupStartDate').hidden = started || noDates;
     document.getElementById('groupStarted').hidden = !started;
-    document.getElementById('inputStartDate').required = !started;
+    document.getElementById('inputStartDate').required = !started && !noDates;
     document.getElementById('inputFinishedCount').required = started;
     syncFinishedLimits(); // also sets which class date (next / last) is required
     updateSchedulePreview();
@@ -1372,6 +1380,11 @@
     const total = readTotalSessions();
     if (isNaN(total)) {
       show('error', `Enter the total number of classes: a number from 1 to ${MAX_TOTAL}.`);
+      return;
+    }
+
+    if (isNoDatesMode()) {
+      show('info', `No class dates yet: the student is saved with ${total} class${total === 1 ? '' : 'es'} to plan later. They show in the Students table and Earnings, not on Today or Schedule. When the dates are decided, open the student and use Edit → First Class Date.`);
       return;
     }
 
@@ -1452,6 +1465,7 @@
   });
   document.getElementById('modeNew').addEventListener('change', applyStudentMode);
   document.getElementById('modeStarted').addEventListener('change', applyStudentMode);
+  document.getElementById('modeNoDates').addEventListener('change', applyStudentMode);
 
   function closeAddStudentModal() {
     modalAddStudent.style.display = 'none';
@@ -1490,7 +1504,9 @@
     }
 
     const payload = { name, class_time: classTime, exam_date: examDate, total_sessions: total };
-    if (started) {
+    if (isNoDatesMode()) {
+      payload.no_dates = true; // no classes until a first class date is set with Edit
+    } else if (started) {
       const done = parseInt(document.getElementById('inputFinishedCount').value, 10);
       if (isNaN(done) || done < 1 || done > total) { showError(`Classes already finished must be a number from 1 to ${total}.`); return; }
       if (done === total) {
@@ -1535,8 +1551,8 @@
       closeAddStudentModal();
       showToast(data.message || `Student ${name} enrolled with initial schedule.`, 'success');
 
-      if (payload.last_class_date) {
-        // Finished student: nothing on the Schedule, so show them in the Students table
+      if (payload.last_class_date || payload.no_dates) {
+        // Finished / no-dates student: nothing on the Schedule, so show them in the Students table
         switchView('students');
       } else {
         // Show the new student's classes straight away on the Schedule, highlighted
@@ -1725,13 +1741,12 @@
     content: document.getElementById('earnContent'),
     avg: document.getElementById('earnAvg'),
     avgSub: document.getElementById('earnAvgSub'),
-    thisMonth: document.getElementById('earnThisMonth'),
-    thisMonthSub: document.getElementById('earnThisMonthSub'),
+    monthsSoFar: document.getElementById('earnMonthsSoFar'),
+    monthsSoFarSub: document.getElementById('earnMonthsSoFarSub'),
     total: document.getElementById('earnTotal'),
     totalSub: document.getElementById('earnTotalSub'),
     startLabel: document.getElementById('earnStartLabel'),
     startSub: document.getElementById('earnStartSub'),
-    months: document.getElementById('earnMonths'),
     table: document.getElementById('earnTable'),
     empty: document.getElementById('earnEmpty'),
     listSub: document.getElementById('earnListSub'),
@@ -1746,24 +1761,9 @@
     startForm: document.getElementById('formStartDate'),
     startInput: document.getElementById('earnStartDate')
   };
-  const earnState = { payments: [], startDate: '', students: [], editingId: null };
+  const earnState = { payments: [], startDate: '', students: [], names: [], editingId: null };
 
   const rupees = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
-  const monthKey = (dateStr) => dateStr.slice(0, 7); // 'YYYY-MM'
-  const monthLabel = (key) => {
-    const [y, m] = key.split('-').map(Number);
-    return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' });
-  };
-  const monthsBetween = (fromKey, toKey) => {
-    const [y1, m1] = fromKey.split('-').map(Number);
-    const [y2, m2] = toKey.split('-').map(Number);
-    return (y2 - y1) * 12 + (m2 - m1) + 1; // both months included
-  };
-  const addMonth = (key, n) => {
-    const [y, m] = key.split('-').map(Number);
-    const d = new Date(Date.UTC(y, m - 1 + n, 1));
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-  };
 
   async function loadEarnings() {
     earnEls.loading.style.display = 'flex';
@@ -1773,6 +1773,10 @@
       earnState.payments = earn.payments || [];
       earnState.startDate = earn.start_date || '';
       earnState.students = (studs.students || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+      // People added only in Earnings (a name, not a registered student)
+      earnState.names = [...new Set(earnState.payments
+        .filter(p => p.student_id === null || p.student_id === undefined)
+        .map(p => p.student_name))].sort((a, b) => a.localeCompare(b));
       earnEls.loading.style.display = 'none';
       earnEls.content.hidden = false;
       if (earnState.editingId === null) resetPaymentForm();
@@ -1784,6 +1788,7 @@
     }
   }
 
+  // Options: registered students (value = id) and earnings-only names (value = "n:<name>")
   function fillStudentOptions(selectedId, fallbackName) {
     const opts = ['<option value="">Choose a student…</option>'];
     earnState.students.forEach(s => opts.push(`<option value="${s.id}">${escapeHtml(s.name)}</option>`));
@@ -1791,8 +1796,11 @@
     if (selectedId && !earnState.students.some(s => s.id === selectedId)) {
       opts.push(`<option value="${selectedId}">${escapeHtml(fallbackName || 'Deleted student')} (deleted)</option>`);
     }
+    earnState.names.forEach(n => opts.push(`<option value="n:${escapeHtml(n)}">${escapeHtml(n)} (earnings only)</option>`));
     earnEls.student.innerHTML = opts.join('');
-    earnEls.student.value = selectedId ? String(selectedId) : '';
+    if (selectedId) earnEls.student.value = String(selectedId);
+    else if (fallbackName && earnState.names.includes(fallbackName)) earnEls.student.value = `n:${fallbackName}`;
+    else earnEls.student.value = '';
   }
 
   function resetPaymentForm() {
@@ -1824,58 +1832,34 @@
   function renderEarnings() {
     const { payments, startDate } = earnState;
     const today = getTodayLocalDateStr();
-    const thisKey = monthKey(today);
     const total = payments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
 
-    // Per month totals
-    const byMonth = new Map();
-    payments.forEach(p => {
-      const k = monthKey(p.paid_date);
-      const cur = byMonth.get(k) || { total: 0, count: 0 };
-      cur.total += Number(p.amount || 0);
-      cur.count += 1;
-      byMonth.set(k, cur);
-    });
-
-    // Monthly average: total ÷ every month from the start month to this month
+    // Monthly average = total ÷ (days from the coaching start date to today ÷ 30).
+    // Less than 30 days counts as one month, so the first weeks don't inflate the average.
     earnEls.startInput.value = startDate;
     if (startDate) {
-      const months = Math.max(1, monthsBetween(monthKey(startDate), thisKey));
+      const days = Math.max(0, Math.round((parseLocalDate(today) - parseLocalDate(startDate)) / 86400000));
+      const months = Math.max(1, days / 30);
+      const monthsText = Number.isInteger(months) ? String(months) : months.toFixed(1);
       earnEls.avg.textContent = rupees(Math.round(total / months));
-      earnEls.avgSub.textContent = `${rupees(total)} ÷ ${months} month${months === 1 ? '' : 's'} (${monthLabel(monthKey(startDate))} – ${monthLabel(thisKey)})`;
+      earnEls.avgSub.textContent = `${rupees(total)} ÷ ${monthsText} month${months === 1 ? '' : 's'}`;
+      earnEls.monthsSoFar.textContent = monthsText;
+      earnEls.monthsSoFarSub.textContent = days < 30
+        ? `${days} day${days === 1 ? '' : 's'} (counted as 1 month)`
+        : `${days} days ÷ 30`;
       earnEls.startLabel.textContent = formatDisplayDate(startDate);
-      earnEls.startSub.textContent = `${months} month${months === 1 ? '' : 's'} so far`;
+      earnEls.startSub.textContent = `${days} day${days === 1 ? '' : 's'} ago`;
     } else {
       earnEls.avg.textContent = '—';
       earnEls.avgSub.textContent = 'Add your coaching start date below';
+      earnEls.monthsSoFar.textContent = '—';
+      earnEls.monthsSoFarSub.textContent = 'Days since start ÷ 30';
       earnEls.startLabel.textContent = 'Not set';
       earnEls.startSub.textContent = 'Set it below';
     }
 
-    const cur = byMonth.get(thisKey) || { total: 0, count: 0 };
-    earnEls.thisMonth.textContent = rupees(cur.total);
-    earnEls.thisMonthSub.textContent = `${monthLabel(thisKey)} · ${cur.count} payment${cur.count === 1 ? '' : 's'}`;
     earnEls.total.textContent = rupees(total);
     earnEls.totalSub.textContent = `${payments.length} payment${payments.length === 1 ? '' : 's'}`;
-
-    // By month: every month from the start (or first payment) to this month, newest first
-    const firstKey = [startDate ? monthKey(startDate) : null, ...byMonth.keys()].filter(Boolean).sort()[0];
-    const keys = [];
-    if (firstKey) {
-      const lastKey = [thisKey, ...byMonth.keys()].sort().pop();
-      for (let k = lastKey; k >= firstKey && keys.length < 240; k = addMonth(k, -1)) keys.push(k);
-    }
-    const maxMonth = Math.max(1, ...keys.map(k => (byMonth.get(k) || { total: 0 }).total));
-    earnEls.months.innerHTML = keys.length
-      ? keys.map(k => {
-          const m = byMonth.get(k) || { total: 0, count: 0 };
-          return `<li class="earn-month${k === thisKey ? ' is-current' : ''}">
-            <span class="earn-month-name">${monthLabel(k)}</span>
-            <span class="earn-month-bar"><i style="width:${(m.total / maxMonth) * 100}%"></i></span>
-            <span class="earn-month-total">${rupees(m.total)}</span>
-          </li>`;
-        }).join('')
-      : '<li class="earn-months-empty">Months appear here once you add a payment or a start date.</li>';
 
     // All payments, newest first
     earnEls.empty.hidden = payments.length > 0;
@@ -1884,7 +1868,9 @@
     earnEls.table.innerHTML = payments.map(p => `
       <tr data-id="${p.id}"${earnState.editingId === p.id ? ' class="is-editing"' : ''}>
         <td>${escapeHtml(formatDisplayDate(p.paid_date))}</td>
-        <td class="st-name">${escapeHtml(p.student_name)}${earnState.students.some(s => s.id === p.student_id) ? '' : ' <span class="st-sub">deleted student</span>'}</td>
+        <td class="st-name">${escapeHtml(p.student_name)}${p.student_id === null || p.student_id === undefined
+          ? ' <span class="st-sub">earnings only</span>'
+          : earnState.students.some(s => s.id === p.student_id) ? '' : ' <span class="st-sub">deleted student</span>'}</td>
         <td class="st-num earn-amount">${rupees(p.amount)}</td>
         <td class="earn-note">${escapeHtml(p.note || '')}</td>
         <td class="earn-row-actions">
@@ -1905,50 +1891,80 @@
   function renderQuickTable() {
     // Keep anything already typed (e.g. other rows while one row is saved)
     const typed = new Map();
-    quickTable.querySelectorAll('tr[data-sid]').forEach(tr => {
-      typed.set(tr.dataset.sid, {
+    quickTable.querySelectorAll('tr[data-key]').forEach(tr => {
+      typed.set(tr.dataset.key, {
+        name: tr.querySelector('.q-name') ? tr.querySelector('.q-name').value : '',
         amount: tr.querySelector('.q-amount').value,
         note: tr.querySelector('.q-note').value
       });
     });
 
-    const totals = new Map();
-    earnState.payments.forEach(p => totals.set(p.student_id, (totals.get(p.student_id) || 0) + Number(p.amount || 0)));
-    const students = earnState.students;
+    // Totals per registered student (by id) and per earnings-only name
+    const byId = new Map();
+    const byName = new Map();
+    earnState.payments.forEach(p => {
+      if (p.student_id === null || p.student_id === undefined) {
+        byName.set(p.student_name, (byName.get(p.student_name) || 0) + Number(p.amount || 0));
+      } else {
+        byId.set(p.student_id, (byId.get(p.student_id) || 0) + Number(p.amount || 0));
+      }
+    });
 
-    quickEmpty.hidden = students.length > 0;
-    quickTable.closest('.earn-table-wrap').hidden = students.length === 0;
-    quickActions.hidden = students.length === 0;
-    quickSub.textContent = students.length ? `${students.length} student${students.length === 1 ? '' : 's'}` : '';
+    // Rows: every registered student, then people added only for earnings
+    const rows = [
+      ...earnState.students.map(s => ({ key: `s:${s.id}`, name: s.name, total: byId.get(s.id) || 0, extra: false })),
+      ...earnState.names.map(n => ({ key: `n:${n}`, name: n, total: byName.get(n) || 0, extra: true }))
+    ];
+
+    quickEmpty.hidden = true;
+    quickActions.hidden = false;
+    const extraCount = earnState.names.length;
+    quickSub.textContent = `${earnState.students.length} student${earnState.students.length === 1 ? '' : 's'}` +
+      (extraCount ? ` + ${extraCount} earnings only` : '');
     quickError.hidden = true;
 
-    quickTable.innerHTML = students.map(s => {
-      const t = typed.get(String(s.id)) || {};
-      return `
-        <tr data-sid="${s.id}">
-          <td class="st-name">${escapeHtml(s.name)}</td>
-          <td class="st-num q-sofar">${rupees(totals.get(s.id) || 0)}</td>
-          <td><input type="number" class="q-amount" min="0" step="any" inputmode="decimal" placeholder="0" value="${escapeHtml(t.amount || '')}" aria-label="Amount from ${escapeHtml(s.name)}"></td>
-          <td><input type="text" class="q-note" maxlength="200" placeholder="Optional" value="${escapeHtml(t.note || '')}" aria-label="Note for ${escapeHtml(s.name)}"></td>
-          <td class="earn-row-actions"><button type="button" class="btn btn-secondary btn-small" data-act="qsave">Save</button></td>
+    const inputs = (t, label) => `
+          <td><input type="number" class="q-amount" min="0" step="any" inputmode="decimal" placeholder="0" value="${escapeHtml(t.amount || '')}" aria-label="Amount from ${escapeHtml(label)}"></td>
+          <td><input type="text" class="q-note" maxlength="200" placeholder="Optional" value="${escapeHtml(t.note || '')}" aria-label="Note for ${escapeHtml(label)}"></td>
+          <td class="earn-row-actions"><button type="button" class="btn btn-secondary btn-small" data-act="qsave">Save</button></td>`;
+
+    const newT = typed.get('new') || {};
+    quickTable.innerHTML = rows.map(r => `
+        <tr data-key="${escapeHtml(r.key)}">
+          <td class="st-name"><span class="q-label">${escapeHtml(r.name)}</span>${r.extra ? ' <span class="st-pill st-pill-nodates">earnings only</span>' : ''}</td>
+          <td class="st-num q-sofar">${rupees(r.total)}</td>${inputs(typed.get(r.key) || {}, r.name)}
+        </tr>`).join('') + `
+        <tr data-key="new" class="q-new">
+          <td><input type="text" class="q-name" maxlength="100" placeholder="+ Add a name (earnings only)" value="${escapeHtml(newT.name || '')}" aria-label="New name, earnings only"></td>
+          <td class="st-num q-sofar q-new-hint">Not added to Students or Schedule</td>${inputs(newT, 'new name')}
         </tr>`;
-    }).join('');
   }
 
   // Reads one row; returns null if the row is empty, or { err } / { payload }
   function readQuickRow(tr) {
     const amountRaw = tr.querySelector('.q-amount').value.trim();
-    if (!amountRaw) return null;
+    const isNew = tr.dataset.key === 'new';
+    const newName = isNew ? tr.querySelector('.q-name').value.trim() : '';
+    if (!amountRaw) {
+      return isNew && newName ? { err: `${newName}: enter the amount received.` } : null;
+    }
     const amount = parseFloat(amountRaw);
-    const name = tr.querySelector('.st-name').textContent;
+    const name = isNew ? (newName || 'New name') : tr.querySelector('.q-label').textContent;
+    if (isNew && !newName) return { err: 'Enter a name for the new person.' };
     if (!(amount > 0)) return { err: `${name}: enter an amount more than 0.` };
     // Recorded on today's date (no date to fill in)
-    return { payload: { student_id: Number(tr.dataset.sid), amount, paid_date: getTodayLocalDateStr(), note: tr.querySelector('.q-note').value.trim() } };
+    const payload = { amount, paid_date: getTodayLocalDateStr(), note: tr.querySelector('.q-note').value.trim() };
+    const key = tr.dataset.key;
+    if (isNew) payload.student_name = newName;                 // earnings only
+    else if (key.startsWith('n:')) payload.student_name = key.slice(2);
+    else payload.student_id = Number(key.slice(2));
+    return { payload, name };
   }
 
   const clearQuickRow = (tr) => {
     tr.querySelector('.q-amount').value = '';
     tr.querySelector('.q-note').value = '';
+    if (tr.querySelector('.q-name')) tr.querySelector('.q-name').value = '';
   };
 
   quickTable.addEventListener('click', async (e) => {
@@ -1965,7 +1981,7 @@
         body: JSON.stringify(row.payload)
       }));
       clearQuickRow(tr);
-      showToast(`${rupees(row.payload.amount)} from ${tr.querySelector('.st-name').textContent} saved.`, 'success');
+      showToast(`${rupees(row.payload.amount)} from ${row.name} saved.`, 'success');
       loadEarnings();
     } catch (err) {
       showToast(`Could not save: ${err.message}`, 'error');
@@ -1982,7 +1998,7 @@
 
   btnQuickSaveAll.addEventListener('click', async () => {
     quickError.hidden = true;
-    const rows = [...quickTable.querySelectorAll('tr[data-sid]')]
+    const rows = [...quickTable.querySelectorAll('tr[data-key]')]
       .map(tr => ({ tr, row: readQuickRow(tr) }))
       .filter(x => x.row);
     if (!rows.length) { showToast('Type an amount for at least one student.', 'info'); return; }
@@ -2002,7 +2018,7 @@
           clearQuickRow(tr); // saved rows are cleared, failed ones keep their values
           saved++; sum += row.payload.amount;
         } catch (err) {
-          failed.push(`${tr.querySelector('.st-name').textContent}: ${err.message}`);
+          failed.push(`${row.name}: ${err.message}`);
         }
       }
     });
@@ -2040,14 +2056,18 @@
     const showErr = (msg) => { earnEls.error.textContent = msg; earnEls.error.style.display = 'block'; };
     earnEls.error.style.display = 'none';
 
-    const studentId = parseInt(earnEls.student.value, 10);
+    const choice = earnEls.student.value;
+    const nameOnly = choice.startsWith('n:') ? choice.slice(2) : '';
+    const studentId = nameOnly ? null : parseInt(choice, 10);
     const amount = parseFloat(earnEls.amount.value);
-    if (!studentId) return showErr('Please choose a student.');
+    if (!studentId && !nameOnly) return showErr('Please choose a student.');
     if (!(amount > 0)) return showErr('Please enter the amount (more than 0).');
 
     // No date to fill in: a new payment is recorded on today's date; an edit keeps its date
     const editing = earnState.editingId;
-    const payload = { student_id: studentId, amount, note: earnEls.note.value.trim() };
+    const payload = nameOnly
+      ? { student_name: nameOnly, amount, note: earnEls.note.value.trim() }
+      : { student_id: studentId, amount, note: earnEls.note.value.trim() };
     if (!editing) payload.paid_date = getTodayLocalDateStr();
     try {
       await withButtonsDisabled(earnEls.form, () => apiRequest(editing ? `/api/payments/${editing}` : '/api/payments', {
@@ -2055,7 +2075,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       }));
-      const name = (earnState.students.find(s => s.id === studentId) || {}).name || 'student';
+      const name = nameOnly || (earnState.students.find(s => s.id === studentId) || {}).name || 'student';
       showToast(editing ? 'Payment updated.' : `${rupees(amount)} from ${name} saved.`, 'success');
       resetPaymentForm();
       loadEarnings();
@@ -2207,6 +2227,15 @@
       `Now ${total}. Raise it to add more classes at the end (at least ${Math.max(1, done)}).`;
     document.getElementById('editAttendedHint').textContent =
       `Now ${done} attended, ${left} left. Changing this adds or removes classes at the end, so the total stays the same.`;
+
+    // Student added with "No dates yet": ask for the first class date instead of attended
+    const noDates = (state.currentStudentData.sessions || []).length === 0;
+    document.getElementById('groupEditFirstClass').hidden = !noDates;
+    document.getElementById('groupEditAttended').hidden = noDates;
+    document.getElementById('editFirstClassDate').value = '';
+    if (noDates) {
+      document.getElementById('editTotalHint').textContent = `Now ${total}. Classes are planned when you set the first class date.`;
+    }
     modalEditStudent.style.display = 'flex';
     document.getElementById('editStudentName').focus();
   }
@@ -2275,7 +2304,15 @@
 
     // Confirm what will move before saving
     const lines = [];
-    if (totalChanged) {
+    const noDates = !document.getElementById('groupEditFirstClass').hidden;
+    const firstClass = noDates ? document.getElementById('editFirstClassDate').value : '';
+    if (noDates) {
+      // No classes yet: the total is just stored; a first class date plans the classes
+      if (firstClass) {
+        lines.push(`Plan ${effectiveTotal} class${effectiveTotal === 1 ? '' : 'es'} Monday to Friday from ${formatDisplayDate(firstClass)}? They will appear on Today and Schedule.`);
+        payload.first_class_date = firstClass;
+      }
+    } else if (totalChanged) {
       const d = Math.abs(totalAfter - totalBefore);
       lines.push(totalAfter > totalBefore
         ? `Total classes ${totalBefore} → ${totalAfter}: ${d} class${d === 1 ? ' is' : 'es are'} added at the end of the schedule.`

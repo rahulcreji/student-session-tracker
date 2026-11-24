@@ -377,9 +377,9 @@
                 <div class="metric-sub" id="earnAvgSub">Add your coaching start date</div>
               </div>
               <div class="metric-card">
-                <div class="metric-number" id="earnThisMonth">₹0</div>
-                <div class="metric-title">This month</div>
-                <div class="metric-sub" id="earnThisMonthSub"></div>
+                <div class="metric-number" id="earnMonthsSoFar">—</div>
+                <div class="metric-title">Months so far</div>
+                <div class="metric-sub" id="earnMonthsSoFarSub">Days since start ÷ 30</div>
               </div>
               <div class="metric-card">
                 <div class="metric-number" id="earnTotal">₹0</div>
@@ -398,7 +398,7 @@
                 <h3>All students</h3>
                 <span class="earn-card-sub" id="quickSub"></span>
               </div>
-              <p class="earn-card-sub">Every registered student is listed here. Type the amount you received, then press Save on that row, or Save all.</p>
+              <p class="earn-card-sub">Every student added with Add Student is listed here. Type the amount you received, then press Save on that row, or Save all. Use the last row to add a name only for earnings: it is not added to Students, Today or Schedule.</p>
               <div class="st-table-wrap earn-table-wrap">
                 <table class="st-table earn-table earn-quick-table">
                   <thead>
@@ -415,7 +415,6 @@
             </div>
 
             <div class="earn-grid">
-              <div class="earn-col">
                 <form id="formPayment" class="earn-card" novalidate>
                   <div class="earn-card-head">
                     <h3 id="payFormTitle">Add money received</h3>
@@ -445,20 +444,12 @@
                   <div class="earn-card-head">
                     <h3>Coaching start date</h3>
                   </div>
-                  <p class="earn-card-sub">The day you started the coaching centre. The monthly average counts every month from here to this month.</p>
+                  <p class="earn-card-sub">The day you started the coaching centre. Monthly average = total received ÷ (days from this date to today ÷ 30).</p>
                   <div class="earn-inline">
                     <input type="date" id="earnStartDate" aria-label="Coaching start date">
                     <button type="submit" class="btn btn-secondary" id="btnSaveStartDate">Save date</button>
                   </div>
                 </form>
-              </div>
-
-              <div class="earn-card">
-                <div class="earn-card-head">
-                  <h3>By month</h3>
-                </div>
-                <ul id="earnMonths" class="earn-months"></ul>
-              </div>
             </div>
 
             <div class="earn-card earn-list-card">
@@ -469,7 +460,7 @@
               <div class="st-table-wrap earn-table-wrap">
                 <table class="st-table earn-table">
                   <thead>
-                    <tr><th>Date</th><th>Student</th><th class="st-num">Amount</th><th>Note</th><th class="earn-th-actions"><span class="sr-only">Actions</span></th></tr>
+                    <tr><th>Added on</th><th>Student</th><th class="st-num">Amount</th><th>Note</th><th class="earn-th-actions"><span class="sr-only">Actions</span></th></tr>
                   </thead>
                   <tbody id="earnTable"></tbody>
                 </table>
@@ -562,6 +553,10 @@
           <label class="mode-option" for="modeStarted">
             <input type="radio" name="studentMode" id="modeStarted" value="started">
             <span><strong>Already started</strong><small>Some or all classes are already done</small></span>
+          </label>
+          <label class="mode-option" for="modeNoDates">
+            <input type="radio" name="studentMode" id="modeNoDates" value="nodates">
+            <span><strong>No dates yet</strong><small>Enrolled, class dates not decided</small></span>
           </label>
         </fieldset>
 
@@ -668,7 +663,14 @@
             <span class="field-hint" id="editTotalHint">Raise it to add more classes at the end</span>
           </div>
 
-          <div class="form-group">
+          <!-- Only for a student added with "No dates yet" -->
+          <div class="form-group" id="groupEditFirstClass" hidden>
+            <label for="editFirstClassDate">First Class Date <span class="optional">(when decided)</span></label>
+            <input type="date" id="editFirstClassDate">
+            <span class="field-hint">No class dates yet. Pick the first class to plan their classes Monday to Friday, or leave empty.</span>
+          </div>
+
+          <div class="form-group" id="groupEditAttended">
             <label for="editClassesAttended">Classes Attended So Far</label>
             <input type="number" id="editClassesAttended" min="0" max="20" inputmode="numeric">
             <span class="field-hint" id="editAttendedHint">Changing this adds or removes classes at the end, so the total stays 20.</span>

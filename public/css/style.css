@@ -2670,3 +2670,19 @@ button.cal-day:focus-visible {
   .earn-quick-table .q-note { min-width: 0; }
   .earn-quick-table .earn-row-actions .btn-small:first-child { padding-left: 0.65rem; }
 }
+
+/* Add Student: three choices (New / Already started / No dates yet) */
+.mode-switch { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 520px) { .mode-switch { grid-template-columns: 1fr; } }
+.st-pill-nodates { background: var(--gray-100); color: var(--gray-600); }
+
+/* Earnings table: row to add a name that only counts for earnings */
+.earn-quick-table tr.q-new { background: var(--gray-50); }
+.earn-quick-table .q-name { width: 100%; min-width: 10rem; }
+.q-new-hint { color: var(--gray-500) !important; font-weight: 400 !important; font-size: 0.75rem; white-space: normal !important; }
+@media (max-width: 640px) {
+  .earn-quick-table tr.q-new td:nth-child(1) { grid-column: 1 / -1; grid-area: auto; }
+  .earn-quick-table tr.q-new { grid-template-areas: "student student" "sofar sofar" "amount amount" "note note" "actions actions"; }
+  .earn-quick-table tr.q-new td:nth-child(1) { grid-area: student; }
+  .earn-quick-table tr.q-new td:nth-child(2) { grid-area: sofar; text-align: left; }
+}

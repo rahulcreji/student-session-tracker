@@ -181,9 +181,12 @@ export async function onRequestPatch(context) {
     const counts = await db.prepare(`
       SELECT
         SUM(CASE WHEN status = 'Taken' THEN 1 ELSE 0 END) AS taken,
-        SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) AS pending
+        SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) AS pending,
+        COUNT(*) AS all_rows
       FROM sessions WHERE student_id = ?
     `).bind(studentId).first();
+    // A student added with "No dates yet" has no classes at all until a first class date is set
+    const hasSchedule = (counts?.all_rows || 0) > 0;
     const takenNow = counts?.taken || 0;
     const pendingAfterExam = (counts?.pending || 0) - affected.length;
     const activeNow = takenNow + pendingAfterExam; // classes in the schedule (not Missed)
@@ -210,11 +213,30 @@ export async function onRequestPatch(context) {
     if (maxSessions < attendedAfter) {
       return error(`${attendedAfter} class(es) are already attended, so total classes can't be less than ${attendedAfter}.`, 400);
     }
-    if (target !== null && maxSessions <= oldMax) {
+    if (target !== null && maxSessions <= oldMax && hasSchedule) {
       const pendingLeft = pendingAfterExam - Math.max(0, activeNow - maxSessions);
       if (target - takenNow > pendingLeft) {
         return error(`Only ${pendingLeft} class(es) are left, so classes attended can be at most ${takenNow + pendingLeft}.`, 400);
       }
+    }
+
+    // First class date for a student who has no class dates yet: plan their classes Mon–Fri
+    let firstClassPlan = null;
+    if (body.first_class_date) {
+      if (hasSchedule) return error('This student already has class dates.', 400);
+      let first = parseDate(body.first_class_date);
+      if (!first) return error('First class date must be a valid date.', 400);
+      while (!isWeekday(first)) first = addDays(first, 1);
+      const exam = parseDate(examDate);
+      const plan = [];
+      for (let d = first; plan.length < maxSessions && (!exam || d.getTime() < exam.getTime()); d = addDays(d, 1)) {
+        if (isWeekday(d)) plan.push(formatDate(d));
+      }
+      if (!plan.length) return error('The first class must be before the exam date.', 400);
+      firstClassPlan = plan;
+      target = null; // nothing attended yet for a student who is only now getting dates
+    } else if (!hasSchedule) {
+      target = null; // no classes yet: attended can't change; total is just stored
     }
 
     const stmts = [
@@ -224,11 +246,21 @@ export async function onRequestPatch(context) {
     affected.forEach(r => stmts.push(
       db.prepare(`DELETE FROM sessions WHERE id = ? AND status = 'Pending'`).bind(r.id)
     ));
+    if (firstClassPlan) {
+      const ins = db.prepare(`INSERT INTO sessions (student_id, scheduled_date, status, is_weekend) VALUES (?, ?, 'Pending', 0)`);
+      firstClassPlan.forEach(d => stmts.push(ins.bind(studentId, d)));
+      stmts.push(db.prepare(`UPDATE students SET start_date = ? WHERE id = ?`).bind(firstClassPlan[0], studentId));
+    }
     await db.batch(stmts);
 
     // Apply the new total: add classes at the end, or remove upcoming classes from the end
     let totalNote = '';
-    if (maxSessions > activeNow && maxSessions !== oldMax) {
+    if (firstClassPlan) {
+      totalNote = ` ${firstClassPlan.length} class(es) planned Monday to Friday from ${firstClassPlan[0]} to ${firstClassPlan[firstClassPlan.length - 1]}.` +
+        (firstClassPlan.length < maxSessions ? ` Only ${firstClassPlan.length} fit before the exam.` : '');
+    } else if (!hasSchedule) {
+      if (maxSessions !== oldMax) totalNote = ` Total classes set to ${maxSessions}.`;
+    } else if (maxSessions > activeNow && maxSessions !== oldMax) {
       const want = maxSessions - activeNow;
       const today = validateClientToday(body.today);
       let added = 0;

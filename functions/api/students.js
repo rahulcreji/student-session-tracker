@@ -101,6 +101,22 @@ export async function onRequestPost(context) {
     }
     const beforeExam = (d) => !examDateObj || d.getTime() < examDateObj.getTime();
 
+    // Enrolled (e.g. already paid) but class dates not decided yet: save the student with
+    // no classes. They show in the Students table and Earnings, not on Today or Schedule.
+    // The first class date is set later with Edit (PATCH first_class_date).
+    if (body.no_dates === true) {
+      const res = await db.prepare(`
+        INSERT INTO students (name, start_date, class_time, exam_date, max_sessions)
+        VALUES (?, '', ?, ?, ?)
+      `).bind(name.trim(), class_time.trim(), examDateObj ? formatDate(examDateObj) : '', maxSessions).run();
+      return json({
+        success: true,
+        student_id: res.meta?.last_row_id ?? null,
+        sessions_created: 0,
+        message: `${name.trim()} added with no class dates yet. Set the first class date later with Edit.`
+      }, 201);
+    }
+
     const finishedRaw = parseInt(body.classes_already_finished, 10);
     const classesFinished = Math.min(maxSessions, Math.max(0, isNaN(finishedRaw) ? 0 : finishedRaw));
 

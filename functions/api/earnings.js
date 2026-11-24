@@ -50,7 +50,16 @@ function parseAmount(raw) {
 async function readPaymentFields(db, body, partial) {
   const out = {};
 
-  if (!partial || body.student_id !== undefined) {
+  const hasId = body.student_id !== undefined && body.student_id !== null && body.student_id !== '';
+  const nameOnly = !hasId && typeof body.student_name === 'string';
+  if (nameOnly) {
+    // Earnings-only person: just a name, not a registered student (no classes, not in Students)
+    const nm = body.student_name.trim();
+    if (!nm) return { err: 'Please enter a name.' };
+    if (nm.length > 100) return { err: 'Name must be 100 characters or fewer.' };
+    out.student_id = null;
+    out.student_name = nm;
+  } else if (!partial || hasId) {
     const sid = parseInt(body.student_id, 10);
     if (!sid) return { err: 'Please choose a student.' };
     const st = await db.prepare(`SELECT id, name FROM students WHERE id = ?`).bind(sid).first();
