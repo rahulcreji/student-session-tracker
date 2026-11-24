@@ -1284,6 +1284,23 @@
     return document.getElementById('modeStarted').checked;
   }
 
+  // Total classes chosen in the Add Student form (1–200), or NaN if not valid
+  const MAX_TOTAL = 200;
+  function readTotalSessions() {
+    const n = parseInt(document.getElementById('inputTotalSessions').value, 10);
+    return n >= 1 && n <= MAX_TOTAL ? n : NaN;
+  }
+
+  // Keep the "Classes Already Finished" limits in step with the total
+  function syncFinishedLimits() {
+    const total = readTotalSessions();
+    const max = isNaN(total) ? 19 : Math.max(1, total - 1);
+    document.getElementById('inputFinishedCount').max = String(max);
+    document.getElementById('finishedHint').textContent = isNaN(total) || total < 2
+      ? 'How many classes are done'
+      : `How many of the ${total} classes are done (1–${total - 1})`;
+  }
+
   // Shows the fields for "New student" or "Already started" and keeps `required` in sync
   function applyStudentMode() {
     const started = isAlreadyStartedMode();
@@ -1292,6 +1309,7 @@
     document.getElementById('inputStartDate').required = !started;
     document.getElementById('inputNextClassDate').required = started;
     document.getElementById('inputFinishedCount').required = started;
+    syncFinishedLimits();
     updateSchedulePreview();
   }
 
@@ -1318,15 +1336,25 @@
       preview.style.display = 'block';
     };
 
+    const total = readTotalSessions();
+    if (isNaN(total)) {
+      show('error', `Enter the total number of classes: a number from 1 to ${MAX_TOTAL}.`);
+      return;
+    }
+
     if (isAlreadyStartedMode()) {
       const next = document.getElementById('inputNextClassDate').value;
       const done = parseInt(document.getElementById('inputFinishedCount').value, 10);
       if (!next || !exam || isNaN(done)) { preview.style.display = 'none'; return; }
-      if (done < 1 || done > 19) {
-        show('error', 'Enter how many classes are already done: a number from 1 to 19.');
+      if (total < 2) {
+        show('error', 'With only 1 class in total, choose "New student".');
         return;
       }
-      const left = 20 - done;
+      if (done < 1 || done > total - 1) {
+        show('error', `Enter how many classes are already done: a number from 1 to ${total - 1}.`);
+        return;
+      }
+      const left = total - done;
       const dates = weekdaysFrom(next, exam, left);
       if (!dates.length) {
         show('error', 'The next class must be a weekday before the exam date.');
@@ -1351,7 +1379,7 @@
       show('error', 'The first class date must be before the exam date.');
       return;
     }
-    const dates = weekdaysFrom(start, exam, 20);
+    const dates = weekdaysFrom(start, exam, total);
     if (!dates.length) {
       show('error', 'No weekdays fit before the exam date.');
       return;
@@ -1361,16 +1389,23 @@
       ? ` The first class date is in the past: ${pastDays} class day(s) before today will count as attended (untick any they missed on the Today page). If this student already attended classes, choose "Already started" instead.`
       : '';
     const last = dates[dates.length - 1];
-    if (dates.length < 20) {
-      show('warning', `Only ${dates.length} of 20 classes (Mon–Fri) fit before the exam, last class ${formatDisplayDate(last)}.` + pastNote);
+    const classWord = total === 1 ? 'class' : 'classes';
+    if (dates.length < total) {
+      show('warning', `Only ${dates.length} of ${total} classes (Mon–Fri) fit before the exam, last class ${formatDisplayDate(last)}.` + pastNote);
+    } else if (total === 1) {
+      show(pastNote ? 'warning' : 'info', `1 class will be scheduled, on ${formatDisplayDate(last)}.` + pastNote + noExamNote);
     } else {
-      show(pastNote ? 'warning' : 'info', `20 classes (Mon–Fri) will be scheduled, from ${formatDisplayDate(dates[0])} to ${formatDisplayDate(last)}.` + pastNote + noExamNote);
+      show(pastNote ? 'warning' : 'info', `${total} ${classWord} (Mon–Fri) will be scheduled, from ${formatDisplayDate(dates[0])} to ${formatDisplayDate(last)}.` + pastNote + noExamNote);
     }
   }
 
   ['inputStartDate', 'inputExamDate', 'inputNextClassDate'].forEach(id =>
     document.getElementById(id).addEventListener('change', updateSchedulePreview));
   document.getElementById('inputFinishedCount').addEventListener('input', updateSchedulePreview);
+  document.getElementById('inputTotalSessions').addEventListener('input', () => {
+    syncFinishedLimits();
+    updateSchedulePreview();
+  });
   document.getElementById('modeNew').addEventListener('change', applyStudentMode);
   document.getElementById('modeStarted').addEventListener('change', applyStudentMode);
 
@@ -1404,12 +1439,19 @@
       return;
     }
 
-    const payload = { name, class_time: classTime, exam_date: examDate };
+    const total = readTotalSessions();
+    if (isNaN(total)) {
+      showError(`Total classes must be a number from 1 to ${MAX_TOTAL}.`);
+      return;
+    }
+
+    const payload = { name, class_time: classTime, exam_date: examDate, total_sessions: total };
     if (started) {
       const nextClass = document.getElementById('inputNextClassDate').value;
       const done = parseInt(document.getElementById('inputFinishedCount').value, 10);
       if (!nextClass) { showError('Please choose the date of the next class.'); return; }
-      if (isNaN(done) || done < 1 || done > 19) { showError('Classes already finished must be a number from 1 to 19.'); return; }
+      if (total < 2) { showError('With only 1 class in total, choose "New student".'); return; }
+      if (isNaN(done) || done < 1 || done > total - 1) { showError(`Classes already finished must be a number from 1 to ${total - 1}.`); return; }
       if (examDate && nextClass >= examDate) { showError('The next class must be before the exam date.'); return; }
       payload.next_class_date = nextClass;
       payload.classes_already_finished = done;
@@ -1731,8 +1773,15 @@
     attendedInput.value = done;
     attendedInput.dataset.original = String(done);
     attendedInput.max = String(done + left);
+    const total = st.max_sessions || 20;
+    const totalInput = document.getElementById('editTotalSessions');
+    totalInput.value = total;
+    totalInput.dataset.original = String(total);
+    totalInput.min = String(Math.max(1, done));
+    document.getElementById('editTotalHint').textContent =
+      `Now ${total}. Raise it to add more classes at the end (at least ${Math.max(1, done)}).`;
     document.getElementById('editAttendedHint').textContent =
-      `Now ${done} attended, ${left} left. Changing this adds or removes classes at the end, so the total stays ${st.max_sessions || 20}.`;
+      `Now ${done} attended, ${left} left. Changing this adds or removes classes at the end, so the total stays the same.`;
     modalEditStudent.style.display = 'flex';
     document.getElementById('editStudentName').focus();
   }
@@ -1762,27 +1811,63 @@
       return;
     }
 
-    // Classes attended so far: only sent when changed, after confirming what will move
+    const editError = (msg) => {
+      formEditError.textContent = msg;
+      formEditError.style.display = 'block';
+    };
+
+    // Total classes: only sent when changed
+    const totalInput = document.getElementById('editTotalSessions');
+    const totalBefore = parseInt(totalInput.dataset.original, 10);
+    const totalAfter = parseInt(totalInput.value, 10);
+    const totalChanged = totalInput.value !== '' && totalAfter !== totalBefore;
+    const effectiveTotal = totalChanged ? totalAfter : totalBefore;
+
+    // Classes attended so far: only sent when changed
     const attendedInput = document.getElementById('editClassesAttended');
     const before = parseInt(attendedInput.dataset.original, 10);
     const after = parseInt(attendedInput.value, 10);
-    if (attendedInput.value !== '' && after !== before) {
-      if (isNaN(after) || after < 0 || after > parseInt(attendedInput.max, 10)) {
-        formEditError.textContent = `Classes attended must be a number from 0 to ${attendedInput.max}.`;
-        formEditError.style.display = 'block';
+    const attendedChanged = attendedInput.value !== '' && after !== before;
+    const attendedFinal = attendedChanged ? after : before;
+
+    if (totalChanged && (isNaN(totalAfter) || totalAfter < 1 || totalAfter > MAX_TOTAL)) {
+      editError(`Total classes must be a number from 1 to ${MAX_TOTAL}.`);
+      return;
+    }
+    if (attendedChanged) {
+      // Classes left in the schedule after the total change
+      const maxAttended = parseInt(attendedInput.max, 10) + (effectiveTotal - totalBefore);
+      const limit = Math.min(effectiveTotal, Math.max(before, maxAttended));
+      if (isNaN(after) || after < 0 || after > limit) {
+        editError(`Classes attended must be a number from 0 to ${limit}.`);
         return;
       }
+    }
+    if (totalChanged && totalAfter < attendedFinal) {
+      editError(`${attendedFinal} class(es) are attended, so total classes can't be less than ${attendedFinal}.`);
+      return;
+    }
+
+    // Confirm what will move before saving
+    const lines = [];
+    if (totalChanged) {
+      const d = Math.abs(totalAfter - totalBefore);
+      lines.push(totalAfter > totalBefore
+        ? `Total classes ${totalBefore} → ${totalAfter}: ${d} class${d === 1 ? ' is' : 'es are'} added at the end of the schedule.`
+        : `Total classes ${totalBefore} → ${totalAfter}: the last ${d} upcoming class${d === 1 ? ' is' : 'es are'} removed.`);
+    }
+    if (attendedChanged) {
       const diff = Math.abs(after - before);
-      const ok = confirm(
-        `Change classes attended from ${before} to ${after}?\n\n` +
-        (after > before
-          ? `The last ${diff} upcoming class${diff === 1 ? ' is' : 'es are'} removed from the end of the schedule.`
-          : `${diff} class${diff === 1 ? ' is' : 'es are'} added at the end of the schedule.`)
-      );
-      if (!ok) return;
-      payload.classes_attended = after;
+      lines.push(`Classes attended ${before} → ${after}: ` + (after > before
+        ? `the last ${diff} upcoming class${diff === 1 ? ' is' : 'es are'} removed from the end of the schedule.`
+        : `${diff} class${diff === 1 ? ' is' : 'es are'} added at the end of the schedule.`));
+    }
+    if (lines.length) {
+      if (!confirm(`Save these changes?\n\n${lines.join('\n\n')}`)) return;
       payload.today = getTodayLocalDateStr();
     }
+    if (totalChanged) payload.total_sessions = totalAfter;
+    if (attendedChanged) payload.classes_attended = after;
 
     const save = (extra = {}) => withButtonsDisabled(formEditStudent, () =>
       apiRequest(`/api/students/${st.id}`, {

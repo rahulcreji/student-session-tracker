@@ -402,7 +402,7 @@
       <div class="modal-header">
         <div>
           <h3>Enroll New Student</h3>
-          <p class="modal-subtext">Plans 20 classes, Monday to Friday, before the exam date</p>
+          <p class="modal-subtext">Plans the classes Monday to Friday, before the exam date</p>
         </div>
         <button class="modal-close" id="btnCloseAddStudent" aria-label="Close">&times;</button>
       </div>
@@ -410,6 +410,12 @@
         <div class="form-group">
           <label for="inputStudentName">Student Name <span class="required">*</span></label>
           <input type="text" id="inputStudentName" placeholder="e.g. Rahul Sharma" required autocomplete="off">
+        </div>
+
+        <div class="form-group">
+          <label for="inputTotalSessions">Total Classes <span class="required">*</span></label>
+          <input type="number" id="inputTotalSessions" min="1" max="200" value="20" required inputmode="numeric">
+          <span class="field-hint">How many classes this student's course has (e.g. 5, 10, 20)</span>
         </div>
 
         <fieldset class="mode-switch">
@@ -436,7 +442,7 @@
           <div class="form-group">
             <label for="inputFinishedCount">Classes Already Finished <span class="required">*</span></label>
             <input type="number" id="inputFinishedCount" min="1" max="19" value="1" inputmode="numeric">
-            <span class="field-hint">How many of the 20 classes are done (1–19)</span>
+            <span class="field-hint" id="finishedHint">How many of the 20 classes are done (1–19)</span>
           </div>
           <div class="form-group">
             <label for="inputNextClassDate">Next Class Date <span class="required">*</span></label>
@@ -514,10 +520,18 @@
           </div>
         </div>
 
-        <div class="form-group">
-          <label for="editClassesAttended">Classes Attended So Far</label>
-          <input type="number" id="editClassesAttended" min="0" max="20" inputmode="numeric">
-          <span class="field-hint" id="editAttendedHint">Changing this adds or removes classes at the end, so the total stays 20.</span>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="editTotalSessions">Total Classes</label>
+            <input type="number" id="editTotalSessions" min="1" max="200" inputmode="numeric">
+            <span class="field-hint" id="editTotalHint">Raise it to add more classes at the end</span>
+          </div>
+
+          <div class="form-group">
+            <label for="editClassesAttended">Classes Attended So Far</label>
+            <input type="number" id="editClassesAttended" min="0" max="20" inputmode="numeric">
+            <span class="field-hint" id="editAttendedHint">Changing this adds or removes classes at the end, so the total stays 20.</span>
+          </div>
         </div>
 
         <div id="formEditError" class="alert-box alert-error" style="display: none;"></div>

@@ -72,3 +72,6 @@ export function validateClientToday(todayStr) {
   const diffDays = Math.round((d.getTime() - utcToday) / 86400000);
   return Math.abs(diffDays) <= 1 ? formatDate(d) : null;
 }
+
+// Largest total number of classes a student course can have
+export const MAX_TOTAL_SESSIONS = 200;

@@ -1,5 +1,5 @@
 import { json, error, parseDate, formatDate, addDays, isWeekday } from '../_utils.js';
-import { scheduleMakeup, validateClientToday } from '../_schedule.js';
+import { scheduleMakeup, validateClientToday, MAX_TOTAL_SESSIONS } from '../_schedule.js';
 
 /**
  * GET /api/students/[id]
@@ -178,36 +178,96 @@ export async function onRequestPatch(context) {
       }, 409);
     }
 
+    const counts = await db.prepare(`
+      SELECT
+        SUM(CASE WHEN status = 'Taken' THEN 1 ELSE 0 END) AS taken,
+        SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) AS pending
+      FROM sessions WHERE student_id = ?
+    `).bind(studentId).first();
+    const takenNow = counts?.taken || 0;
+    const pendingAfterExam = (counts?.pending || 0) - affected.length;
+    const activeNow = takenNow + pendingAfterExam; // classes in the schedule (not Missed)
+
+    // Total classes for the course: classes are added to / removed from the end of the schedule
+    const oldMax = student.max_sessions || 20;
+    let maxSessions = oldMax;
+    if (body.total_sessions !== undefined && body.total_sessions !== null && body.total_sessions !== '') {
+      maxSessions = parseInt(body.total_sessions, 10);
+      if (isNaN(maxSessions) || maxSessions < 1 || maxSessions > MAX_TOTAL_SESSIONS) {
+        return error(`Total classes must be a number from 1 to ${MAX_TOTAL_SESSIONS}.`, 400);
+      }
+    }
+
     // "Classes attended so far": validate before changing anything
-    const maxSessions = student.max_sessions || 20;
-    let delta = 0;
+    let target = null;
     if (body.classes_attended !== undefined && body.classes_attended !== null && body.classes_attended !== '') {
-      const target = parseInt(body.classes_attended, 10);
+      target = parseInt(body.classes_attended, 10);
       if (isNaN(target) || target < 0 || target > maxSessions) {
         return error(`Classes attended must be a number from 0 to ${maxSessions}.`, 400);
       }
-      const counts = await db.prepare(`
-        SELECT
-          SUM(CASE WHEN status = 'Taken' THEN 1 ELSE 0 END) AS taken,
-          SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) AS pending
-        FROM sessions WHERE student_id = ?
-      `).bind(studentId).first();
-      const taken = counts?.taken || 0;
-      const pendingLeft = (counts?.pending || 0) - affected.length;
-      delta = target - taken;
-      if (delta > pendingLeft) {
-        return error(`Only ${pendingLeft} class(es) are left, so classes attended can be at most ${taken + pendingLeft}.`, 400);
+    }
+    const attendedAfter = target === null ? takenNow : target;
+    if (maxSessions < attendedAfter) {
+      return error(`${attendedAfter} class(es) are already attended, so total classes can't be less than ${attendedAfter}.`, 400);
+    }
+    if (target !== null && maxSessions <= oldMax) {
+      const pendingLeft = pendingAfterExam - Math.max(0, activeNow - maxSessions);
+      if (target - takenNow > pendingLeft) {
+        return error(`Only ${pendingLeft} class(es) are left, so classes attended can be at most ${takenNow + pendingLeft}.`, 400);
       }
     }
 
     const stmts = [
-      db.prepare(`UPDATE students SET name = ?, class_time = ?, exam_date = ? WHERE id = ?`)
-        .bind(name, classTime, examDate, studentId)
+      db.prepare(`UPDATE students SET name = ?, class_time = ?, exam_date = ?, max_sessions = ? WHERE id = ?`)
+        .bind(name, classTime, examDate, maxSessions, studentId)
     ];
     affected.forEach(r => stmts.push(
       db.prepare(`DELETE FROM sessions WHERE id = ? AND status = 'Pending'`).bind(r.id)
     ));
     await db.batch(stmts);
+
+    // Apply the new total: add classes at the end, or remove upcoming classes from the end
+    let totalNote = '';
+    if (maxSessions > activeNow && maxSessions !== oldMax) {
+      const want = maxSessions - activeNow;
+      const today = validateClientToday(body.today);
+      let added = 0;
+      for (let i = 0; i < want; i++) {
+        const m = await scheduleMakeup(db, { student_id: studentId, scheduled_date: today || formatDate(new Date()), exam_date: examDate }, maxSessions, today);
+        if (!m.inserted) break;
+        added++;
+      }
+      totalNote = ` Total classes set to ${maxSessions}: ${added} class(es) added at the end.` +
+        (added < want ? ` ${want - added} could not be added before the exam date.` : '');
+    } else if (maxSessions < activeNow) {
+      const remove = activeNow - maxSessions; // never more than the upcoming classes (checked above)
+      const { results: lastPending } = await db.prepare(`
+        SELECT id FROM sessions WHERE student_id = ? AND status = 'Pending'
+        ORDER BY scheduled_date DESC, id DESC LIMIT ?
+      `).bind(studentId, remove).all();
+      if (lastPending?.length) {
+        await db.batch(lastPending.map(r => db.prepare(`DELETE FROM sessions WHERE id = ? AND status = 'Pending'`).bind(r.id)));
+      }
+      totalNote = ` Total classes set to ${maxSessions}: the last ${lastPending?.length || 0} upcoming class(es) were removed.`;
+    } else if (maxSessions !== oldMax) {
+      totalNote = ` Total classes set to ${maxSessions}.`;
+    }
+
+    // Change in classes attended, measured against the schedule after the new total
+    let delta = 0;
+    if (target !== null) {
+      const now = await db.prepare(`
+        SELECT SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) AS pending
+        FROM sessions WHERE student_id = ?
+      `).bind(studentId).first();
+      const pendingLeft = now?.pending || 0;
+      delta = target - takenNow;
+      if (delta > pendingLeft) {
+        // Only possible when the exam date stopped new classes being added above
+        delta = pendingLeft;
+        totalNote += ` Classes attended could only be raised to ${takenNow + pendingLeft}.`;
+      }
+    }
 
     // Apply the change in classes attended, keeping the total at max_sessions
     let attendedNote = '';
@@ -262,11 +322,11 @@ export async function onRequestPatch(context) {
 
     return json({
       success: true,
-      student: { ...student, name, class_time: classTime, exam_date: examDate },
+      student: { ...student, name, class_time: classTime, exam_date: examDate, max_sessions: maxSessions },
       removed_count: affected.length,
       attended_change: delta,
       message: `${name}: details saved.` +
-        (affected.length ? ` ${affected.length} class(es) after the new exam date were removed.` : '') + attendedNote
+        (affected.length ? ` ${affected.length} class(es) after the new exam date were removed.` : '') + totalNote + attendedNote
     });
   } catch (err) {
     return error(`Failed to update student: ${err.message}`, 500);

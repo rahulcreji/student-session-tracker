@@ -1,4 +1,5 @@
 import { json, error, parseDate, formatDate, addDays, isWeekday } from './_utils.js';
+import { MAX_TOTAL_SESSIONS } from './_schedule.js';
 
 /**
  * GET /api/students
@@ -47,7 +48,8 @@ const TIME_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
 /**
  * POST /api/students
  * Scenario A: Create a student and generate their initial schedule.
- *  - Up to max_sessions (20) weekday (Mon-Fri) sessions from start_date.
+ *  - Up to max_sessions weekday (Mon-Fri) sessions from start_date
+ *    (`total_sessions` in the body, 1–200, default 20).
  *  - First N (= classes_already_finished) are 'Taken', the rest 'Pending'.
  *  - Exam Cutoff Rule: only dates strictly before exam_date are generated.
  *
@@ -71,7 +73,14 @@ export async function onRequestPost(context) {
     }
 
     const { name, start_date, class_time, exam_date } = body || {};
-    const maxSessions = 20;
+    // Total classes in this student's course (default 20; some take 5, 10, ...)
+    let maxSessions = 20;
+    if (body.total_sessions !== undefined && body.total_sessions !== null && body.total_sessions !== '') {
+      maxSessions = parseInt(body.total_sessions, 10);
+      if (isNaN(maxSessions) || maxSessions < 1 || maxSessions > MAX_TOTAL_SESSIONS) {
+        return error(`Total classes must be a number from 1 to ${MAX_TOTAL_SESSIONS}.`, 400);
+      }
+    }
 
     if (!name || typeof name !== 'string' || !name.trim()) {
       return error('Student name is required.', 400);
