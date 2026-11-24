@@ -2643,3 +2643,30 @@ button.cal-day:focus-visible {
   .earn-table td:nth-child(5) { grid-area: actions; text-align: left; margin-top: 0.25rem; }
   .earn-row-actions .btn-small:first-child { padding-left: 0; }
 }
+
+/* Earnings: "All students" entry table */
+.earn-quick-table { min-width: 600px; }
+.earn-quick-table td { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+.earn-quick-table input { min-height: 38px; padding: 0.4rem 0.6rem; font-size: 0.9rem; }
+.earn-quick-table .q-amount { width: 7.5rem; }
+.earn-quick-table .q-note { width: 100%; min-width: 9rem; }
+.q-sofar { color: var(--success-hover); font-weight: 700; }
+.earn-quick-error { flex: 1; align-self: center; color: var(--danger); font-size: 0.85rem; font-weight: 600; }
+.earn-quick-error[hidden], #quickActions[hidden] { display: none; }
+
+@media (max-width: 640px) {
+  .earn-quick-table { min-width: 0; }
+  .earn-quick-table tr {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas: "student sofar" "amount amount" "note note" "actions actions";
+    gap: 0.5rem 0.75rem;
+  }
+  .earn-quick-table td:nth-child(1) { grid-area: student; font-size: 0.95rem; color: var(--gray-900); align-self: center; }
+  .earn-quick-table td:nth-child(2) { grid-area: sofar; text-align: right; align-self: center; font-size: 0.9rem; }
+  .earn-quick-table td:nth-child(3) { grid-area: amount; }
+  .earn-quick-table td:nth-child(4) { grid-area: note; font-size: inherit; max-width: none; }
+  .earn-quick-table td:nth-child(5) { grid-area: actions; text-align: right; margin-top: 0; }
+  .earn-quick-table .q-amount { width: 100%; }
+  .earn-quick-table .q-note { min-width: 0; }
+  .earn-quick-table .earn-row-actions .btn-small:first-child { padding-left: 0.65rem; }
+}

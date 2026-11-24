@@ -65,7 +65,9 @@ async function readPaymentFields(db, body, partial) {
     out.amount = amount;
   }
 
-  if (!partial || body.paid_date !== undefined) {
+  if (!partial && (body.paid_date === undefined || body.paid_date === null || body.paid_date === '')) {
+    out.paid_date = formatDate(new Date()); // no date given: recorded today
+  } else if (body.paid_date !== undefined) {
     const d = parseDate(body.paid_date);
     if (!d) return { err: 'Please choose the date you received the money.' };
     out.paid_date = formatDate(d);

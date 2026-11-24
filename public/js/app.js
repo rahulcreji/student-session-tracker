@@ -1689,7 +1689,6 @@
     formTitle: document.getElementById('payFormTitle'),
     student: document.getElementById('payStudent'),
     amount: document.getElementById('payAmount'),
-    date: document.getElementById('payDate'),
     note: document.getElementById('payNote'),
     error: document.getElementById('payError'),
     cancel: document.getElementById('btnPayCancel'),
@@ -1728,6 +1727,7 @@
       earnEls.content.hidden = false;
       if (earnState.editingId === null) resetPaymentForm();
       renderEarnings();
+      renderQuickTable();
     } catch (err) {
       earnEls.loading.style.display = 'none';
       showToast(`Could not load earnings: ${err.message}`, 'error');
@@ -1753,7 +1753,6 @@
     earnEls.error.style.display = 'none';
     fillStudentOptions(null);
     earnEls.amount.value = '';
-    earnEls.date.value = getTodayLocalDateStr();
     earnEls.note.value = '';
     earnEls.form.classList.remove('is-editing');
   }
@@ -1766,7 +1765,6 @@
     earnEls.error.style.display = 'none';
     fillStudentOptions(p.student_id, p.student_name);
     earnEls.amount.value = p.amount;
-    earnEls.date.value = p.paid_date;
     earnEls.note.value = p.note || '';
     earnEls.form.classList.add('is-editing');
     earnEls.form.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1846,6 +1844,123 @@
       </tr>`).join('');
   }
 
+  // ---- "All students" table: type amounts for many students and save ----
+  const quickTable = document.getElementById('quickTable');
+  const quickEmpty = document.getElementById('quickEmpty');
+  const quickSub = document.getElementById('quickSub');
+  const quickError = document.getElementById('quickError');
+  const quickActions = document.getElementById('quickActions');
+  const btnQuickSaveAll = document.getElementById('btnQuickSaveAll');
+
+  function renderQuickTable() {
+    // Keep anything already typed (e.g. other rows while one row is saved)
+    const typed = new Map();
+    quickTable.querySelectorAll('tr[data-sid]').forEach(tr => {
+      typed.set(tr.dataset.sid, {
+        amount: tr.querySelector('.q-amount').value,
+        note: tr.querySelector('.q-note').value
+      });
+    });
+
+    const totals = new Map();
+    earnState.payments.forEach(p => totals.set(p.student_id, (totals.get(p.student_id) || 0) + Number(p.amount || 0)));
+    const students = earnState.students;
+
+    quickEmpty.hidden = students.length > 0;
+    quickTable.closest('.earn-table-wrap').hidden = students.length === 0;
+    quickActions.hidden = students.length === 0;
+    quickSub.textContent = students.length ? `${students.length} student${students.length === 1 ? '' : 's'}` : '';
+    quickError.hidden = true;
+
+    quickTable.innerHTML = students.map(s => {
+      const t = typed.get(String(s.id)) || {};
+      return `
+        <tr data-sid="${s.id}">
+          <td class="st-name">${escapeHtml(s.name)}</td>
+          <td class="st-num q-sofar">${rupees(totals.get(s.id) || 0)}</td>
+          <td><input type="number" class="q-amount" min="0" step="any" inputmode="decimal" placeholder="0" value="${escapeHtml(t.amount || '')}" aria-label="Amount from ${escapeHtml(s.name)}"></td>
+          <td><input type="text" class="q-note" maxlength="200" placeholder="Optional" value="${escapeHtml(t.note || '')}" aria-label="Note for ${escapeHtml(s.name)}"></td>
+          <td class="earn-row-actions"><button type="button" class="btn btn-secondary btn-small" data-act="qsave">Save</button></td>
+        </tr>`;
+    }).join('');
+  }
+
+  // Reads one row; returns null if the row is empty, or { err } / { payload }
+  function readQuickRow(tr) {
+    const amountRaw = tr.querySelector('.q-amount').value.trim();
+    if (!amountRaw) return null;
+    const amount = parseFloat(amountRaw);
+    const name = tr.querySelector('.st-name').textContent;
+    if (!(amount > 0)) return { err: `${name}: enter an amount more than 0.` };
+    // Recorded on today's date (no date to fill in)
+    return { payload: { student_id: Number(tr.dataset.sid), amount, paid_date: getTodayLocalDateStr(), note: tr.querySelector('.q-note').value.trim() } };
+  }
+
+  const clearQuickRow = (tr) => {
+    tr.querySelector('.q-amount').value = '';
+    tr.querySelector('.q-note').value = '';
+  };
+
+  quickTable.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-act="qsave"]');
+    if (!btn) return;
+    const tr = btn.closest('tr');
+    const row = readQuickRow(tr);
+    if (!row) { showToast('Type an amount first.', 'info'); tr.querySelector('.q-amount').focus(); return; }
+    if (row.err) { showToast(row.err, 'error'); return; }
+    try {
+      await withButtonsDisabled(tr, () => apiRequest('/api/payments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(row.payload)
+      }));
+      clearQuickRow(tr);
+      showToast(`${rupees(row.payload.amount)} from ${tr.querySelector('.st-name').textContent} saved.`, 'success');
+      loadEarnings();
+    } catch (err) {
+      showToast(`Could not save: ${err.message}`, 'error');
+    }
+  });
+
+  // Enter in a row saves that row
+  quickTable.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.matches('input')) {
+      e.preventDefault();
+      e.target.closest('tr').querySelector('button[data-act="qsave"]').click();
+    }
+  });
+
+  btnQuickSaveAll.addEventListener('click', async () => {
+    quickError.hidden = true;
+    const rows = [...quickTable.querySelectorAll('tr[data-sid]')]
+      .map(tr => ({ tr, row: readQuickRow(tr) }))
+      .filter(x => x.row);
+    if (!rows.length) { showToast('Type an amount for at least one student.', 'info'); return; }
+    const bad = rows.find(x => x.row.err);
+    if (bad) { quickError.textContent = bad.row.err; quickError.hidden = false; return; }
+
+    let saved = 0, sum = 0;
+    const failed = [];
+    await withButtonsDisabled(quickTable.closest('.earn-quick-card'), async () => {
+      for (const { tr, row } of rows) {
+        try {
+          await apiRequest('/api/payments', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(row.payload)
+          });
+          clearQuickRow(tr); // saved rows are cleared, failed ones keep their values
+          saved++; sum += row.payload.amount;
+        } catch (err) {
+          failed.push(`${tr.querySelector('.st-name').textContent}: ${err.message}`);
+        }
+      }
+    });
+    if (saved) showToast(`${saved} payment${saved === 1 ? '' : 's'} saved (${rupees(sum)}).`, 'success');
+    if (failed.length) { quickError.textContent = `Not saved: ${failed.join('; ')}`; quickError.hidden = false; }
+    loadEarnings();
+  });
+
   earnEls.table.addEventListener('click', async (e) => {
     const btn = e.target.closest('button[data-act]');
     if (!btn) return;
@@ -1877,13 +1992,13 @@
 
     const studentId = parseInt(earnEls.student.value, 10);
     const amount = parseFloat(earnEls.amount.value);
-    const paidDate = earnEls.date.value;
     if (!studentId) return showErr('Please choose a student.');
     if (!(amount > 0)) return showErr('Please enter the amount (more than 0).');
-    if (!paidDate) return showErr('Please choose the date you received the money.');
 
-    const payload = { student_id: studentId, amount, paid_date: paidDate, note: earnEls.note.value.trim() };
+    // No date to fill in: a new payment is recorded on today's date; an edit keeps its date
     const editing = earnState.editingId;
+    const payload = { student_id: studentId, amount, note: earnEls.note.value.trim() };
+    if (!editing) payload.paid_date = getTodayLocalDateStr();
     try {
       await withButtonsDisabled(earnEls.form, () => apiRequest(editing ? `/api/payments/${editing}` : '/api/payments', {
         method: editing ? 'PATCH' : 'POST',
