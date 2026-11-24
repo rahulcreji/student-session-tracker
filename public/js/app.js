@@ -28,7 +28,8 @@
     schedule: document.getElementById('viewSchedule'),
     students: document.getElementById('viewStudents'),
     profile: document.getElementById('viewProfile'),
-    notes: document.getElementById('viewNotes')
+    notes: document.getElementById('viewNotes'),
+    earnings: document.getElementById('viewEarnings')
   };
 
   // Nav buttons
@@ -38,6 +39,8 @@
   const mobTabSchedule = document.getElementById('mobTabSchedule');
   const mobTabDashboard = document.getElementById('mobTabDashboard');
   const mobTabStudents = document.getElementById('mobTabStudents');
+  const tabEarnings = document.getElementById('tabEarnings');
+  const mobTabEarnings = document.getElementById('mobTabEarnings');
   const tabNotes = document.getElementById('tabNotes');
   const mobTabNotes = document.getElementById('mobTabNotes');
   const notesText = document.getElementById('notesText');
@@ -311,6 +314,8 @@
     mobTabStudents.classList.toggle('active', inStudents);
     tabNotes.classList.toggle('active', viewName === 'notes');
     mobTabNotes.classList.toggle('active', viewName === 'notes');
+    tabEarnings.classList.toggle('active', viewName === 'earnings');
+    mobTabEarnings.classList.toggle('active', viewName === 'earnings');
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
@@ -322,6 +327,8 @@
       loadStudents();
     } else if (viewName === 'notes') {
       loadNotes();
+    } else if (viewName === 'earnings') {
+      loadEarnings();
     } else if (viewName === 'profile') {
       if (studentId) {
         state.currentStudentId = studentId;
@@ -1662,7 +1669,260 @@
     if (notesDirty()) { e.preventDefault(); e.returnValue = ''; }
   });
 
+  // ================= View: Earnings (money received + monthly average) =================
+  const earnEls = {
+    loading: document.getElementById('earnLoading'),
+    content: document.getElementById('earnContent'),
+    avg: document.getElementById('earnAvg'),
+    avgSub: document.getElementById('earnAvgSub'),
+    thisMonth: document.getElementById('earnThisMonth'),
+    thisMonthSub: document.getElementById('earnThisMonthSub'),
+    total: document.getElementById('earnTotal'),
+    totalSub: document.getElementById('earnTotalSub'),
+    startLabel: document.getElementById('earnStartLabel'),
+    startSub: document.getElementById('earnStartSub'),
+    months: document.getElementById('earnMonths'),
+    table: document.getElementById('earnTable'),
+    empty: document.getElementById('earnEmpty'),
+    listSub: document.getElementById('earnListSub'),
+    form: document.getElementById('formPayment'),
+    formTitle: document.getElementById('payFormTitle'),
+    student: document.getElementById('payStudent'),
+    amount: document.getElementById('payAmount'),
+    date: document.getElementById('payDate'),
+    note: document.getElementById('payNote'),
+    error: document.getElementById('payError'),
+    cancel: document.getElementById('btnPayCancel'),
+    save: document.getElementById('btnPaySave'),
+    startForm: document.getElementById('formStartDate'),
+    startInput: document.getElementById('earnStartDate')
+  };
+  const earnState = { payments: [], startDate: '', students: [], editingId: null };
+
+  const rupees = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  const monthKey = (dateStr) => dateStr.slice(0, 7); // 'YYYY-MM'
+  const monthLabel = (key) => {
+    const [y, m] = key.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+  };
+  const monthsBetween = (fromKey, toKey) => {
+    const [y1, m1] = fromKey.split('-').map(Number);
+    const [y2, m2] = toKey.split('-').map(Number);
+    return (y2 - y1) * 12 + (m2 - m1) + 1; // both months included
+  };
+  const addMonth = (key, n) => {
+    const [y, m] = key.split('-').map(Number);
+    const d = new Date(Date.UTC(y, m - 1 + n, 1));
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  };
+
+  async function loadEarnings() {
+    earnEls.loading.style.display = 'flex';
+    earnEls.content.hidden = true;
+    try {
+      const [earn, studs] = await Promise.all([apiRequest('/api/earnings'), apiRequest('/api/students')]);
+      earnState.payments = earn.payments || [];
+      earnState.startDate = earn.start_date || '';
+      earnState.students = (studs.students || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+      earnEls.loading.style.display = 'none';
+      earnEls.content.hidden = false;
+      if (earnState.editingId === null) resetPaymentForm();
+      renderEarnings();
+    } catch (err) {
+      earnEls.loading.style.display = 'none';
+      showToast(`Could not load earnings: ${err.message}`, 'error');
+    }
+  }
+
+  function fillStudentOptions(selectedId, fallbackName) {
+    const opts = ['<option value="">Choose a student…</option>'];
+    earnState.students.forEach(s => opts.push(`<option value="${s.id}">${escapeHtml(s.name)}</option>`));
+    // A payment from a student who was deleted keeps their name
+    if (selectedId && !earnState.students.some(s => s.id === selectedId)) {
+      opts.push(`<option value="${selectedId}">${escapeHtml(fallbackName || 'Deleted student')} (deleted)</option>`);
+    }
+    earnEls.student.innerHTML = opts.join('');
+    earnEls.student.value = selectedId ? String(selectedId) : '';
+  }
+
+  function resetPaymentForm() {
+    earnState.editingId = null;
+    earnEls.formTitle.textContent = 'Add money received';
+    earnEls.save.textContent = 'Save';
+    earnEls.cancel.hidden = true;
+    earnEls.error.style.display = 'none';
+    fillStudentOptions(null);
+    earnEls.amount.value = '';
+    earnEls.date.value = getTodayLocalDateStr();
+    earnEls.note.value = '';
+    earnEls.form.classList.remove('is-editing');
+  }
+
+  function startEditPayment(p) {
+    earnState.editingId = p.id;
+    earnEls.formTitle.textContent = 'Edit payment';
+    earnEls.save.textContent = 'Save changes';
+    earnEls.cancel.hidden = false;
+    earnEls.error.style.display = 'none';
+    fillStudentOptions(p.student_id, p.student_name);
+    earnEls.amount.value = p.amount;
+    earnEls.date.value = p.paid_date;
+    earnEls.note.value = p.note || '';
+    earnEls.form.classList.add('is-editing');
+    earnEls.form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    earnEls.amount.focus({ preventScroll: true });
+  }
+
+  function renderEarnings() {
+    const { payments, startDate } = earnState;
+    const today = getTodayLocalDateStr();
+    const thisKey = monthKey(today);
+    const total = payments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+
+    // Per month totals
+    const byMonth = new Map();
+    payments.forEach(p => {
+      const k = monthKey(p.paid_date);
+      const cur = byMonth.get(k) || { total: 0, count: 0 };
+      cur.total += Number(p.amount || 0);
+      cur.count += 1;
+      byMonth.set(k, cur);
+    });
+
+    // Monthly average: total ÷ every month from the start month to this month
+    earnEls.startInput.value = startDate;
+    if (startDate) {
+      const months = Math.max(1, monthsBetween(monthKey(startDate), thisKey));
+      earnEls.avg.textContent = rupees(Math.round(total / months));
+      earnEls.avgSub.textContent = `${rupees(total)} ÷ ${months} month${months === 1 ? '' : 's'} (${monthLabel(monthKey(startDate))} – ${monthLabel(thisKey)})`;
+      earnEls.startLabel.textContent = formatDisplayDate(startDate);
+      earnEls.startSub.textContent = `${months} month${months === 1 ? '' : 's'} so far`;
+    } else {
+      earnEls.avg.textContent = '—';
+      earnEls.avgSub.textContent = 'Add your coaching start date below';
+      earnEls.startLabel.textContent = 'Not set';
+      earnEls.startSub.textContent = 'Set it below';
+    }
+
+    const cur = byMonth.get(thisKey) || { total: 0, count: 0 };
+    earnEls.thisMonth.textContent = rupees(cur.total);
+    earnEls.thisMonthSub.textContent = `${monthLabel(thisKey)} · ${cur.count} payment${cur.count === 1 ? '' : 's'}`;
+    earnEls.total.textContent = rupees(total);
+    earnEls.totalSub.textContent = `${payments.length} payment${payments.length === 1 ? '' : 's'}`;
+
+    // By month: every month from the start (or first payment) to this month, newest first
+    const firstKey = [startDate ? monthKey(startDate) : null, ...byMonth.keys()].filter(Boolean).sort()[0];
+    const keys = [];
+    if (firstKey) {
+      const lastKey = [thisKey, ...byMonth.keys()].sort().pop();
+      for (let k = lastKey; k >= firstKey && keys.length < 240; k = addMonth(k, -1)) keys.push(k);
+    }
+    const maxMonth = Math.max(1, ...keys.map(k => (byMonth.get(k) || { total: 0 }).total));
+    earnEls.months.innerHTML = keys.length
+      ? keys.map(k => {
+          const m = byMonth.get(k) || { total: 0, count: 0 };
+          return `<li class="earn-month${k === thisKey ? ' is-current' : ''}">
+            <span class="earn-month-name">${monthLabel(k)}</span>
+            <span class="earn-month-bar"><i style="width:${(m.total / maxMonth) * 100}%"></i></span>
+            <span class="earn-month-total">${rupees(m.total)}</span>
+          </li>`;
+        }).join('')
+      : '<li class="earn-months-empty">Months appear here once you add a payment or a start date.</li>';
+
+    // All payments, newest first
+    earnEls.empty.hidden = payments.length > 0;
+    earnEls.table.closest('.earn-table-wrap').hidden = payments.length === 0;
+    earnEls.listSub.textContent = payments.length ? `${payments.length} total` : '';
+    earnEls.table.innerHTML = payments.map(p => `
+      <tr data-id="${p.id}"${earnState.editingId === p.id ? ' class="is-editing"' : ''}>
+        <td>${escapeHtml(formatDisplayDate(p.paid_date))}</td>
+        <td class="st-name">${escapeHtml(p.student_name)}${earnState.students.some(s => s.id === p.student_id) ? '' : ' <span class="st-sub">deleted student</span>'}</td>
+        <td class="st-num earn-amount">${rupees(p.amount)}</td>
+        <td class="earn-note">${escapeHtml(p.note || '')}</td>
+        <td class="earn-row-actions">
+          <button type="button" class="btn btn-ghost btn-small" data-act="edit">Edit</button>
+          <button type="button" class="btn btn-ghost btn-small earn-del" data-act="delete" aria-label="Delete payment">Delete</button>
+        </td>
+      </tr>`).join('');
+  }
+
+  earnEls.table.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const id = Number(btn.closest('tr').dataset.id);
+    const p = earnState.payments.find(x => x.id === id);
+    if (!p) return;
+    if (btn.dataset.act === 'edit') {
+      startEditPayment(p);
+      renderEarnings();
+      return;
+    }
+    if (!confirm(`Delete this payment?\n\n${p.student_name} · ${rupees(p.amount)} · ${formatDisplayDate(p.paid_date)}`)) return;
+    try {
+      await withButtonsDisabled(earnEls.table, () => apiRequest(`/api/payments/${id}`, { method: 'DELETE' }));
+      if (earnState.editingId === id) resetPaymentForm();
+      showToast('Payment deleted.', 'success');
+      loadEarnings();
+    } catch (err) {
+      showToast(`Could not delete: ${err.message}`, 'error');
+    }
+  });
+
+  earnEls.cancel.addEventListener('click', () => { resetPaymentForm(); renderEarnings(); });
+
+  earnEls.form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const showErr = (msg) => { earnEls.error.textContent = msg; earnEls.error.style.display = 'block'; };
+    earnEls.error.style.display = 'none';
+
+    const studentId = parseInt(earnEls.student.value, 10);
+    const amount = parseFloat(earnEls.amount.value);
+    const paidDate = earnEls.date.value;
+    if (!studentId) return showErr('Please choose a student.');
+    if (!(amount > 0)) return showErr('Please enter the amount (more than 0).');
+    if (!paidDate) return showErr('Please choose the date you received the money.');
+
+    const payload = { student_id: studentId, amount, paid_date: paidDate, note: earnEls.note.value.trim() };
+    const editing = earnState.editingId;
+    try {
+      await withButtonsDisabled(earnEls.form, () => apiRequest(editing ? `/api/payments/${editing}` : '/api/payments', {
+        method: editing ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }));
+      const name = (earnState.students.find(s => s.id === studentId) || {}).name || 'student';
+      showToast(editing ? 'Payment updated.' : `${rupees(amount)} from ${name} saved.`, 'success');
+      resetPaymentForm();
+      loadEarnings();
+    } catch (err) {
+      showErr(err.message);
+    }
+  });
+
+  earnEls.startForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const value = earnEls.startInput.value;
+    if (value && value > getTodayLocalDateStr()) {
+      showToast('The start date cannot be in the future.', 'error');
+      return;
+    }
+    try {
+      const data = await withButtonsDisabled(earnEls.startForm, () => apiRequest('/api/earnings/start-date', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start_date: value })
+      }));
+      earnState.startDate = data.start_date || '';
+      showToast(value ? 'Start date saved.' : 'Start date cleared.', 'success');
+      renderEarnings();
+    } catch (err) {
+      showToast(`Could not save: ${err.message}`, 'error');
+    }
+  });
+
   // ================= Event Listeners: Navigation =================
+  tabEarnings.addEventListener('click', () => switchView('earnings'));
+  mobTabEarnings.addEventListener('click', () => switchView('earnings'));
   tabNotes.addEventListener('click', () => switchView('notes'));
   mobTabNotes.addEventListener('click', () => switchView('notes'));
   tabDashboard.addEventListener('click', () => switchView('dashboard'));

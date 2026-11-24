@@ -15,12 +15,17 @@ import * as sessionWeekend from '../functions/api/sessions/weekend.js';
 import * as sessionsCloseDays from '../functions/api/sessions/close-days.js';
 import * as schedule from '../functions/api/schedule.js';
 import * as notes from '../functions/api/notes.js';
+import * as earnings from '../functions/api/earnings.js';
 import { json } from '../functions/api/_utils.js';
 
 // [pattern, { METHOD: handler }]
 const routes = [
   [/^\/api\/health$/, { GET: health.onRequestGet }],
   [/^\/api\/notes$/, { GET: notes.onRequestGet, PUT: notes.onRequestPut }],
+  [/^\/api\/earnings$/, { GET: earnings.onRequestGet }],
+  [/^\/api\/earnings\/start-date$/, { PUT: earnings.onRequestPutStartDate }],
+  [/^\/api\/payments$/, { POST: earnings.onRequestPostPayment }],
+  [/^\/api\/payments\/(?<id>\d+)$/, { PATCH: earnings.onRequestPatchPayment, DELETE: earnings.onRequestDeletePayment }],
   [/^\/api\/dashboard$/, { GET: dashboard.onRequestGet }],
   [/^\/api\/students$/, { GET: students.onRequestGet, POST: students.onRequestPost }],
   [/^\/api\/students\/(?<id>\d+)$/, { GET: studentById.onRequestGet, PATCH: studentById.onRequestPatch, DELETE: studentById.onRequestDelete }],

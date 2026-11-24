@@ -31,3 +31,21 @@ CREATE TABLE IF NOT EXISTS notes (
     body TEXT NOT NULL DEFAULT '',
     updated_at TEXT
 );
+
+-- Money received from students (also created automatically by /api/earnings)
+CREATE TABLE IF NOT EXISTS payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id INTEGER,
+    student_name TEXT NOT NULL,
+    amount REAL NOT NULL,
+    paid_date TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_payments_date ON payments(paid_date);
+
+-- App settings, e.g. coaching_start_date (also created automatically)
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
